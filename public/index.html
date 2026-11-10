@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>WAR FRONT — 3D общевойсковой бой</title>
+<style>
+@font-face{font-family:Unbounded;src:url(fonts/Unbounded-Variable.woff2) format('woff2');font-weight:200 900;font-display:swap}
+:root{--bg:#121416;--panel:rgba(22,25,27,.86);--line:rgba(255,255,255,.09);--txt:#e6e3da;--dim:#8d918c;--acc:#e3a53c;--a:#7d8c4a;--b:#4f7395;--red:#e0503f;--green:#7fc35a}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--txt);font-family:Unbounded,system-ui,sans-serif;user-select:none;-webkit-user-select:none;touch-action:none}
+canvas#gl{position:fixed;inset:0;width:100%;height:100%;display:block}
+canvas#hud{position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:5}
+.screen{position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:20;
+  background:radial-gradient(ellipse at 50% 30%,rgba(60,58,48,.45),rgba(10,11,12,.93) 70%)}
+.screen.on{display:flex}
+.screen{overflow-y:auto;padding:16px 0}
+.screen>.card{margin:auto}
+.noise::after{content:"";position:absolute;inset:0;pointer-events:none;opacity:.07;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
+.card{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:34px 38px;width:min(560px,92vw);box-shadow:0 30px 80px rgba(0,0,0,.5);backdrop-filter:blur(8px)}
+.logo{font-weight:900;font-size:clamp(34px,6vw,58px);letter-spacing:.04em;line-height:.95}
+.logo span{color:var(--acc)}
+.sub{color:var(--dim);font-size:11px;letter-spacing:.32em;text-transform:uppercase;margin:10px 0 28px}
+label{display:block;font-size:10px;letter-spacing:.25em;color:var(--dim);text-transform:uppercase;margin:0 0 8px}
+input.txt{width:100%;background:rgba(0,0,0,.35);border:1px solid var(--line);border-radius:10px;color:var(--txt);font:600 16px Unbounded;padding:14px 16px;outline:none}
+input.txt:focus{border-color:var(--acc)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:0;border-radius:10px;cursor:pointer;font:800 13px Unbounded;letter-spacing:.12em;text-transform:uppercase;padding:15px 20px;color:#1a1a16;background:var(--acc);transition:transform .08s,filter .15s}
+.btn:hover{filter:brightness(1.1)}.btn:active{transform:scale(.97)}
+.btn.ghost{background:rgba(255,255,255,.06);color:var(--txt);border:1px solid var(--line)}
+.btn:disabled{opacity:.4;cursor:default;filter:none}
+.row{display:flex;gap:12px;align-items:stretch}
+.or{display:flex;align-items:center;gap:14px;color:var(--dim);font-size:10px;letter-spacing:.3em;margin:24px 0}
+.or::before,.or::after{content:"";flex:1;height:1px;background:var(--line)}
+.digits{display:flex;gap:8px;flex:1}
+.digits input{width:100%;min-width:0;aspect-ratio:.82;text-align:center;font:800 24px Unbounded;background:rgba(0,0,0,.35);border:1px solid var(--line);border-radius:10px;color:var(--txt);outline:none}
+.digits input:focus{border-color:var(--acc)}
+.err{color:var(--red);font-size:11px;min-height:16px;margin-top:10px;letter-spacing:.05em}
+.codebig{display:flex;gap:8px;justify-content:center;margin:6px 0 4px}
+.codebig b{width:54px;height:66px;display:flex;align-items:center;justify-content:center;font-size:34px;font-weight:900;background:rgba(0,0,0,.4);border:1px solid var(--line);border-radius:10px;color:var(--acc)}
+.small{font-size:10px;color:var(--dim);letter-spacing:.2em;text-transform:uppercase;text-align:center}
+.modes{display:flex;gap:8px;margin:22px 0 16px}
+.modes button{flex:1;padding:12px;border-radius:10px;border:1px solid var(--line);background:rgba(255,255,255,.04);color:var(--dim);font:700 11px Unbounded;letter-spacing:.12em;cursor:pointer}
+.modes button.on{background:rgba(227,165,60,.15);border-color:var(--acc);color:var(--txt)}
+.modes button:disabled{cursor:default}
+.teams{display:flex;gap:12px}
+.team{flex:1;background:rgba(0,0,0,.25);border:1px solid var(--line);border-radius:12px;padding:12px;min-height:150px}
+.team h4{font-size:11px;letter-spacing:.25em;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center}
+.team h4 button{font:700 9px Unbounded;letter-spacing:.1em;padding:5px 8px;border-radius:6px;border:1px solid var(--line);background:rgba(255,255,255,.05);color:var(--txt);cursor:pointer}
+.chip{font-size:12px;padding:8px 10px;border-radius:8px;background:rgba(255,255,255,.05);margin-bottom:6px;display:flex;justify-content:space-between;align-items:center}
+.chip.me{outline:1px solid rgba(227,165,60,.6)}
+.chip i{font-style:normal;font-size:9px;color:var(--acc);letter-spacing:.15em}
+.help{margin-top:18px;font-size:10px;color:var(--dim);line-height:1.9;letter-spacing:.04em}
+.help kbd{font:700 9px Unbounded;padding:2px 6px;border:1px solid var(--line);border-radius:4px;color:var(--txt);background:rgba(255,255,255,.05)}
+/* HUD */
+#ui{position:fixed;inset:0;pointer-events:none;z-index:6;display:none}
+#ui.on{display:block}
+#top{position:absolute;top:14px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:14px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:8px 16px;font-weight:800}
+#top .sc{font-size:22px;min-width:24px;text-align:center}
+#top .tA{color:var(--a)}#top .tB{color:var(--b)}
+#top .mid{font-size:9px;letter-spacing:.25em;color:var(--dim);text-align:center}
+#bottom{position:absolute;bottom:18px;left:50%;transform:translateX(-50%);width:min(560px,72vw)}
+#hpwrap{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 14px}
+#hpline{display:flex;justify-content:space-between;font-size:10px;letter-spacing:.2em;color:var(--dim);margin-bottom:6px}
+#hpline b{color:var(--txt);font-size:14px;letter-spacing:0}
+#hpbar{height:10px;border-radius:6px;background:rgba(255,255,255,.08);overflow:hidden}
+#hpfill{height:100%;width:100%;background:linear-gradient(90deg,#8fbf55,#b6d35f);transition:width .25s}
+.gauges{display:flex;gap:12px;margin-top:9px;align-items:flex-end}
+.gauges div{font-size:8px;letter-spacing:.2em;color:var(--dim);display:flex;flex-direction:column;gap:3px}
+.gauges b{font-size:14px;color:var(--txt);letter-spacing:0;min-width:34px}
+.gauges .g{flex:1}
+.gauges i{display:block;height:6px;border-radius:3px;background:rgba(255,255,255,.08);overflow:hidden}
+.gauges em{display:block;height:100%;width:50%;background:#b6d35f}
+.gauges i.rudder{position:relative;overflow:visible}
+.gauges i.rudder em{position:absolute;top:-2px;width:6px;height:10px;margin-left:-3px;border-radius:2px;background:#f3f1e8;left:50%}
+.gauges i.rudder::after{content:'';position:absolute;left:50%;top:0;bottom:0;width:1px;background:rgba(255,255,255,.35)}
+.pips{display:flex;gap:4px;letter-spacing:0}
+.pips u{display:block;width:9px;height:16px;border-radius:3px;background:rgba(255,255,255,.12);position:relative;overflow:hidden;text-decoration:none}
+.pips u i{position:absolute;left:0;right:0;bottom:0;background:#f3f1e8;display:block;height:0}
+#mwarn{position:absolute;top:84px;left:50%;transform:translateX(-50%);padding:8px 16px;border-radius:10px;background:rgba(160,20,10,.75);border:1px solid #ff6a50;color:#fff;font-weight:900;font-size:16px;letter-spacing:.2em;display:none;animation:blink .25s infinite alternate}
+#mwarn.lock{background:rgba(140,90,0,.7);border-color:#e3a53c;animation-duration:.5s}
+#tmis{position:absolute;right:40px;bottom:170px;width:76px;height:76px;border-radius:50%;background:rgba(227,165,60,.4);border:2px solid rgba(255,255,255,.3);color:#fff;font:800 10px Unbounded}
+#tflare{position:absolute;right:130px;bottom:120px;width:62px;height:62px;border-radius:50%;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.25);color:#fff;font:700 9px Unbounded}
+#warn{position:absolute;top:58%;left:0;right:0;text-align:center;font-weight:900;font-size:20px;letter-spacing:.2em;color:#ff6a50;text-shadow:0 2px 10px #000;display:none;animation:blink .5s infinite alternate}
+@keyframes blink{from{opacity:1}to{opacity:.35}}
+#feed{position:absolute;top:14px;right:14px;display:flex;flex-direction:column;gap:6px;align-items:flex-end}
+#feed div{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:11px;animation:fin .25s}
+#feed .x{color:var(--dim);margin:0 6px}
+#log{position:absolute;left:14px;bottom:200px;display:flex;flex-direction:column;gap:4px;font-size:11px}
+#log div{background:rgba(0,0,0,.45);padding:5px 9px;border-radius:6px;animation:fin .2s}
+#chatlog{position:absolute;left:14px;bottom:60px;width:320px;font-size:11px;display:flex;flex-direction:column;gap:3px}
+#chatlog div{background:rgba(0,0,0,.4);padding:4px 8px;border-radius:6px;transition:opacity 1s}
+#chatin{position:absolute;left:14px;bottom:24px;width:320px;display:none;pointer-events:auto;font:600 12px Unbounded;padding:8px 10px;border-radius:8px;border:1px solid var(--acc);background:rgba(0,0,0,.7);color:var(--txt);outline:none}
+#center{position:absolute;top:30%;left:0;right:0;text-align:center;font-weight:900;font-size:clamp(28px,5vw,56px);letter-spacing:.06em;text-shadow:0 4px 30px rgba(0,0,0,.6);opacity:0;transition:opacity .25s}
+#center small{display:block;font-size:12px;letter-spacing:.3em;color:var(--dim);margin-top:8px;font-weight:600}
+#minimap{position:absolute;right:14px;bottom:14px;width:260px;height:180px;border-radius:12px;border:1px solid var(--line);background:#1b1e1a}
+#markers{position:absolute;inset:0;overflow:hidden}
+.mk{position:absolute;transform:translate(-50%,-100%);text-align:center;font-size:10px;font-weight:700;white-space:nowrap;text-shadow:0 1px 3px #000}
+.mk .bar{width:56px;height:4px;margin:3px auto 0;background:rgba(0,0,0,.6);border-radius:2px;overflow:hidden}
+.mk .bar i{display:block;height:100%}
+.mk.en{color:#ff7a68}.mk.en .bar i{background:var(--red)}
+.mk.al{color:#a4e07a}.mk.al .bar i{background:var(--green)}
+.dmgnum{position:absolute;font-weight:900;font-size:18px;color:#ffcf6a;text-shadow:0 2px 6px #000;animation:up 1.1s forwards;transform:translate(-50%,-50%)}
+.dmgnum.ric{color:#cfd6da;font-size:13px;letter-spacing:.1em}
+#flash{position:absolute;inset:0;box-shadow:inset 0 0 160px rgba(220,40,30,.0);transition:box-shadow .5s}
+#board{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);display:none;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 22px;min-width:min(520px,90vw)}
+#board.on,#board.force{display:block}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{font-size:9px;letter-spacing:.2em;color:var(--dim);text-align:left;padding:6px 8px;font-weight:600}
+td{padding:7px 8px;border-top:1px solid var(--line)}
+td.n{text-align:right}th.n{text-align:right}
+tr.me td{color:var(--acc)}
+tr.dead td{opacity:.45}
+#spec{position:absolute;bottom:110px;left:50%;transform:translateX(-50%);font-size:11px;letter-spacing:.2em;color:var(--dim);background:var(--panel);padding:8px 14px;border-radius:8px;display:none}
+#pause .card{text-align:center}
+#pause .btn{width:100%;margin-top:10px}
+#result table{margin:18px 0}
+#mute{position:fixed;top:14px;left:14px;z-index:30;pointer-events:auto;background:var(--panel);border:1px solid var(--line);color:var(--txt);border-radius:10px;width:40px;height:40px;cursor:pointer;font-size:16px}
+/* touch */
+#touch{position:fixed;inset:0;z-index:7;display:none}
+#touch.on{display:block}
+#joy{position:absolute;left:30px;bottom:30px;width:150px;height:150px;border-radius:50%;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.15)}
+#joyk{position:absolute;left:50%;top:50%;width:60px;height:60px;margin:-30px;border-radius:50%;background:rgba(255,255,255,.18)}
+#tfire{position:absolute;right:40px;bottom:60px;width:96px;height:96px;border-radius:50%;background:rgba(224,80,63,.45);border:2px solid rgba(255,255,255,.3);color:#fff;font:800 12px Unbounded}
+#tup{position:absolute;left:200px;bottom:110px}#tdown{position:absolute;left:200px;bottom:40px}
+.tdep{width:58px;height:58px;border-radius:50%;background:rgba(80,180,200,.15);border:1px solid rgba(255,255,255,.25);color:#fff;font:700 8px Unbounded}
+#tzoom{position:absolute;right:150px;bottom:40px;width:62px;height:62px;border-radius:50%;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.25);color:#fff;font:700 10px Unbounded}
+@keyframes fin{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+@keyframes up{0%{opacity:0;margin-top:0}15%{opacity:1}100%{opacity:0;margin-top:-50px}}
+@media (max-height:520px){.card{padding:18px 22px}.logo{font-size:30px}.sub{margin:6px 0 14px}.help{display:none}}
+@media (max-width:1050px) and (min-width:641px){#minimap{width:200px;height:138px;top:64px;bottom:auto}#feed{right:226px}}
+@media (max-width:640px){.card{padding:24px 20px}.codebig b{width:42px;height:54px;font-size:26px}#minimap{width:130px;height:130px;top:64px;bottom:auto}#log{display:none}}
+#cmd{position:absolute;left:14px;top:70px;width:250px;display:none;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;pointer-events:auto;max-height:calc(100vh - 100px);overflow:auto}
+body.cmdv #cmd{display:block}
+body.cmdv #bottom{display:none}
+#cmd .ct{font-size:10px;letter-spacing:.25em;color:var(--dim);margin-bottom:8px}
+#cmd .ch{font-size:9px;line-height:1.6;color:var(--dim);margin-top:10px}
+#cmd .vr{display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:8px;cursor:pointer;font-size:10px;font-weight:700;border:1px solid transparent}
+#cmd .vr:hover{background:rgba(255,255,255,.07);border-color:var(--line)}
+#cmd .vr.off{opacity:.45;cursor:default}
+#cmd .vr.mine{border-color:var(--acc)}
+#cmd .vr .ic{width:26px;text-align:center;font-size:14px}
+#cmd .vr .nm{flex:1}
+#cmd .vr .st{font-size:8px;color:var(--dim);font-weight:600}
+#cmd .vr .hb{width:44px;height:5px;background:rgba(255,255,255,.12);border-radius:3px;overflow:hidden}
+#cmd .vr .hb i{display:block;height:100%;background:#9bcf5a}
+#cmdtip{position:absolute;pointer-events:none;transform:translate(-50%,-140%);font-size:10px;font-weight:800;background:rgba(15,17,18,.85);border:1px solid var(--acc);border-radius:6px;padding:4px 8px;white-space:nowrap;display:none}
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<canvas id="hud"></canvas>
+<button id="mute" title="Звук (M)">♪</button>
+
+<!-- MENU -->
+<div id="menu" class="screen on noise">
+  <div class="card">
+    <div class="logo">WAR<br><span>FRONT</span></div>
+    <div class="sub">танки · джипы · самолёты · корабли · онлайн</div>
+    <label>Позывной</label>
+    <input id="name" class="txt" maxlength="14" placeholder="Ваше имя">
+    <div style="height:16px"></div>
+    <button id="createBtn" class="btn" style="width:100%">Создать игру</button>
+    <div class="or">ИЛИ ВОЙТИ ПО КОДУ</div>
+    <div class="row">
+      <div class="digits" id="digits">
+        <input inputmode="numeric" maxlength="1"><input inputmode="numeric" maxlength="1"><input inputmode="numeric" maxlength="1">
+        <input inputmode="numeric" maxlength="1"><input inputmode="numeric" maxlength="1"><input inputmode="numeric" maxlength="1">
+      </div>
+      <button id="joinBtn" class="btn ghost">Войти</button>
+    </div>
+    <div class="err" id="err"></div>
+  </div>
+</div>
+
+<!-- LOBBY -->
+<div id="lobby" class="screen noise">
+  <div class="card" style="width:min(640px,94vw)">
+    <div class="small">Код игры</div>
+    <div class="codebig" id="codebig"></div>
+    <div style="text-align:center;margin-top:10px"><button class="btn ghost" id="copyBtn" style="padding:9px 14px;font-size:10px">Скопировать ссылку</button></div>
+    <div class="modes">
+      <button data-mode="team" id="mTeam">База против базы · 30 очков подкрепления · 20 минут</button>
+      <button data-mode="ffa" id="mFfa" style="display:none">-</button>
+    </div>
+    <div class="teams" id="teams"></div>
+    <div class="row" style="margin-top:18px">
+      <button class="btn ghost" id="leaveBtn">Выйти</button>
+      <button class="btn" id="startBtn" style="flex:1">Начать бой</button>
+    </div>
+    <div class="help">
+      Начинаете над своей базой (вид сверху). <kbd>Клик</kbd> по своей технике — сесть в неё. <kbd>Колесо вниз</kbd> до упора (или <kbd>X</kbd>) — подняться наверх и выбрать другую.<br>
+      <b>Танк / джип:</b> <kbd>WASD</kbd> езда · <kbd>Мышь</kbd> башня · <kbd>Клик</kbd> огонь (у джипа — держать) · <kbd>Shift</kbd> прицел.<br>
+      <b>Самолёт:</b> стоит на полосе. <kbd>W</kbd>/<kbd>S</kbd> тяга, <kbd>A</kbd><kbd>D</kbd> руление, разгон до 200 км/ч и мышь вверх — взлёт. В воздухе летит за мышью. <kbd>Клик</kbd> пушка · <kbd>ПКМ</kbd>/<kbd>Q</kbd> ракеты по земле · <kbd>F</kbd> ловушки. Посадка: на полосу, медленно и ровно, <kbd>S</kbd> — тормоз.<br>
+      <b>Корабль:</b> <kbd>W</kbd>/<kbd>S</kbd> ход · <kbd>A</kbd><kbd>D</kbd> руль · <kbd>Клик</kbd> залп орудий · <kbd>ПКМ</kbd>/<kbd>Q</kbd> ракетный залп в точку прицела.<br>
+      ПВО баз сбивают вражеские самолёты. На своей базе техника чинится. Каждая потерянная машина — минус очко подкрепления. <kbd>Tab</kbd> счёт · <kbd>Enter</kbd> чат · <kbd>M</kbd> звук.
+    </div>
+  </div>
+</div>
+
+<!-- IN-GAME UI -->
+<div id="ui">
+  <div id="markers"></div>
+  <div id="flash"></div>
+  <div id="top"></div>
+  <div id="feed"></div>
+  <div id="log"></div>
+  <div id="chatlog"></div>
+  <input id="chatin" maxlength="80" placeholder="Написать сообщение…">
+  <div id="center"></div>
+  <div id="cmdtip"></div>
+  <div id="spec"></div>
+  <div id="warn"></div>
+  <div id="mwarn"></div>
+  <div id="bottom">
+    <div id="hpwrap">
+      <div id="hpline"><span id="myname">ПИЛОТ</span><b id="hptxt">100</b></div>
+      <div id="hpbar"><div id="hpfill"></div></div>
+      <div class="gauges">
+        <div><span id="g1l">СКОРОСТЬ</span><b id="g1">0</b></div>
+        <div><span id="g2l">-</span><b id="g2" style="min-width:60px">-</b></div>
+        <div class="g"><span id="g3l">ОРУДИЕ</span><i><em id="g3"></em></i></div>
+        <div class="g"><span id="g4l">-</span><i><em id="g4"></em></i></div>
+        <div><span id="g5l">-</span><b id="g5">-</b></div>
+      </div>
+    </div>
+  </div>
+  <canvas id="minimap" width="520" height="360"></canvas>
+  <div id="cmd">
+    <div class="ct">ТЕХНИКА БАЗЫ</div>
+    <div id="cmdlist"></div>
+    <div class="ch">Кликните по технике на карте или в списке, чтобы сесть в неё.<br><kbd>WASD</kbd> / перетаскивание ПКМ — двигать карту · колесо — высота</div>
+  </div>
+  <div id="board"></div>
+</div>
+
+<!-- PAUSE -->
+<div id="pause" class="screen">
+  <div class="card">
+    <div class="logo" style="font-size:30px">ПАУЗА</div>
+    <div class="sub" style="margin-bottom:16px">Код <span id="pcode"></span></div>
+    <button class="btn" id="resumeBtn">Продолжить</button>
+    <button class="btn ghost" id="pLobbyBtn">В лобби (для всех)</button>
+    <button class="btn ghost" id="pLeaveBtn">Покинуть игру</button>
+  </div>
+</div>
+
+<!-- RESULT -->
+<div id="result" class="screen noise">
+  <div class="card" style="text-align:center;width:min(620px,94vw)">
+    <div class="logo" id="resTitle" style="font-size:44px">ПОБЕДА</div>
+    <div class="sub" id="resSub" style="margin-bottom:0"></div>
+    <div id="resTable"></div>
+    <div class="row">
+      <button class="btn ghost" id="resLeave">Выйти</button>
+      <button class="btn ghost" id="resLobby" style="flex:1">Лобби</button>
+      <button class="btn" id="resAgain" style="flex:1">Ещё раз</button>
+    </div>
+    <div class="small" id="resWait" style="margin-top:12px"></div>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script type="importmap">{"imports":{"three":"./vendor/three/three.module.js","three/addons/":"./vendor/three-addons/"}}</script>
+<script type="module" src="game.js"></script>
+</body>
+</html>
