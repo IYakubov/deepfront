@@ -20,14 +20,15 @@ const PORT = process.env.PORT || 3000;
 // ── game constants (keep in sync with client) ──
 const MAX_PLAYERS = 16;
 const MATCH_TIME = 60 * 60;      // safety cap, seconds; normally a match ends when one side has no machines left
-const HP = { tank: 120, jeep: 50, plane: 70, ship: 260, gunner: 40 };
-const MACHINES = 10;             // per team; machine-gun posts don't count
+const HP = { tank: 120, jeep: 50, plane: 70, ship: 260, gunner: 40, icbm: 90, drone: 8 };
+const MACHINES = 11;             // per team; machine-gun posts don't count
 // base layout for team 0 (west); team 1 is mirrored in x
 const LAYOUT = [
   ['tank', -1110, -10, Math.PI / 2], ['tank', -1110, 25, Math.PI / 2], ['tank', -1110, 60, Math.PI / 2],
   ['jeep', -1170, 150, Math.PI / 2], ['jeep', -1150, 165, Math.PI / 2], ['jeep', -1130, 180, Math.PI / 2],
   ['plane', -1430, -262, Math.PI / 2], ['plane', -1395, -238, Math.PI / 2],
   ['ship', -1260, 560, 0.25], ['ship', -1150, 590, 0.25],
+  ['icbm', -1265, 110, Math.PI / 2], ['drone', -1185, 14, Math.PI / 2], ['drone', -1185, 22, Math.PI / 2],
   ['gunner', -985, 40, Math.PI / 2], ['gunner', -1010, 215, Math.PI / 2], ['gunner', -1150, 405, 0],
 ];
 
@@ -62,7 +63,7 @@ function publicRoom(r) {
     vehicles: r.vehicles.map(v => ({ vid: v.vid, team: v.team, type: v.type, n: v.n, hp: v.hp, max: v.max, alive: v.alive, driver: v.driver, spawn: v.spawn, st: v.st, }))
   };
 }
-function countMachines(r) { r.tickets = [0, 1].map(t => r.vehicles.filter(v => v.team === t && v.alive && v.type !== 'gunner').length); }
+function countMachines(r) { r.tickets = [0, 1].map(t => r.vehicles.filter(v => v.team === t && v.alive && v.type !== 'gunner' && v.type !== 'drone').length); }
 function broadcastRoom(r) { io.to(r.code).emit('room', publicRoom(r)); }
 function teamCount(r, t) { let n = 0; for (const p of r.players.values()) if (p.team === t) n++; return n; }
 function rebalance(r) {
@@ -210,7 +211,7 @@ io.on('connection', socket => {
     p.hits = (p.hits || []).filter(t => now - t < 1000);
     if (p.hits.length >= 18) return;
     p.hits.push(now);
-    const dmg = Math.max(1, Math.min(95, Math.round(Number(h.dmg) || 0)));
+    const dmg = Math.max(1, Math.min(h.k === 'icbm' ? 300 : 95, Math.round(Number(h.dmg) || 0)));
     const pt = Array.isArray(h.pt) ? h.pt.slice(0, 3).map(Number) : null;
     damage(room, v, dmg, p.id, pt, String(h.k || '').slice(0, 8));
   });

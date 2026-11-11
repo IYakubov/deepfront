@@ -16,13 +16,13 @@ const BASE_R = 270;
 const RWY = { x0: 1030, x1: 1480, z: -250, w: 30 };   // |x| range, mirrored per team
 const PORT = [{ x: -1200, z: 520 }, { x: 1200, z: 520 }];
 const SAMS = [[-1010, -110], [-1300, 330], [-1450, -60]];   // team 0, team 1 mirrored
-const HP = { tank: 120, jeep: 50, plane: 70, ship: 260, gunner: 40 };
-const TYPE_NAME = { tank: 'Танк', jeep: 'Джип', plane: 'Самолёт', ship: 'Корабль', gunner: 'Пулемётчик' };
-const TYPE_ICON = { tank: '▣', jeep: '◆', plane: '✈', ship: '⛴', gunner: '☗' };
+const HP = { tank: 120, jeep: 50, plane: 70, ship: 260, gunner: 40, icbm: 90, drone: 8 };
+const TYPE_NAME = { tank: 'Танк', jeep: 'Джип', plane: 'Самолёт', ship: 'Корабль', gunner: 'Пулемётчик', icbm: 'SS-27', drone: 'FPV-дрон' };
+const TYPE_ICON = { tank: '▣', jeep: '◆', plane: '✈', ship: '⛴', gunner: '☗', icbm: '⇪', drone: '✣' };
 const TEAM_COL = [0x6f7d40, 0x3f6283];
 const TEAM_CSS = ['#a9b86a', '#7fa6c9'];
 // collision / hit boxes in local space [hx, y0, y1, hz]
-const HITBOX = { tank: [1.75, 0, 2.7, 3.5], jeep: [1.15, 0.2, 2.3, 2.3], plane: [7, -1.2, 2.6, 8.6], ship: [4, -2.5, 12, 23], gunner: [1.7, 0, 2.2, 1.7] };
+const HITBOX = { tank: [1.75, 0, 2.7, 3.5], jeep: [1.15, 0.2, 2.3, 2.3], plane: [7, -1.2, 2.6, 8.6], ship: [4, -2.5, 12, 23], gunner: [1.7, 0, 2.2, 1.7], icbm: [1.9, 0, 4.2, 11], drone: [0.7, -0.35, 0.5, 0.7] };
 // damage per weapon against each vehicle type
 const DMG = {
   shell: { tank: 30, jeep: 45, plane: 45, ship: 24, gunner: 40 },
@@ -31,6 +31,7 @@ const DMG = {
   rocket: { tank: 36, jeep: 45, plane: 40, ship: 30, gunner: 40 },
   navshell: { tank: 24, jeep: 40, plane: 30, ship: 22, gunner: 40 },
   navrocket: { tank: 34, jeep: 45, plane: 40, ship: 32, gunner: 40 },
+  fpv: { tank: 65, jeep: 90, plane: 90, ship: 45, gunner: 90, icbm: 90, drone: 90 },
   bomb: { tank: 85, jeep: 90, plane: 90, ship: 90, gunner: 90 },
 };
 
@@ -1121,6 +1122,68 @@ function buildGunner(color) {
   const tip = new THREE.Object3D(); tip.position.set(0, 0.02, 1.8); gun.add(tip);
   return { g, turret, gun, tip, mats: [teamM], color: new THREE.Color(color) };
 }
+
+// SS-27 «Тополь-М» mobile launcher: 16-wheel truck with a missile canister that erects
+function buildIcbm(color) {
+  const g = new THREE.Group(); g.rotation.order = 'YXZ';
+  const body = new THREE.MeshStandardMaterial({ color, roughness: .8, flatShading: true });
+  const body2 = new THREE.MeshStandardMaterial({ color: new THREE.Color(color).multiplyScalar(0.72), roughness: .8, flatShading: true });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x232524, roughness: .8, flatShading: true });
+  const glass = new THREE.MeshStandardMaterial({ color: 0x22323c, roughness: .2, metalness: .6 });
+  const add = (geo, mat, x, y, z, parent = g) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; parent.add(m); return m; };
+  add(new THREE.BoxGeometry(3.0, 0.9, 20.5), body2, 0, 1.55, 0);                       // chassis
+  add(new THREE.BoxGeometry(3.3, 0.25, 20.8), dark, 0, 1.05, 0);
+  const wheels = [];
+  const tyre = new THREE.CylinderGeometry(0.82, 0.82, 0.62, 12); tyre.rotateZ(Math.PI / 2);
+  const hub = new THREE.CylinderGeometry(0.4, 0.4, 0.66, 8); hub.rotateZ(Math.PI / 2);
+  for (let i = 0; i < 8; i++) for (const sx of [-1, 1]) {
+    const z = 8.6 - i * 2.2 - (i > 3 ? 1.6 : 0);
+    const w = add(tyre, dark, sx * 1.55, 0.82, z); add(hub, body2, 0, 0, 0, w); wheels.push(w);
+    add(new THREE.BoxGeometry(0.75, 0.1, 1.9), body, sx * 1.55, 1.78, z);                // mudguards
+  }
+  for (const sx of [-1, 1]) {                                                           // twin cabs beside the canister nose
+    add(new THREE.BoxGeometry(1.15, 1.7, 2.6), body, sx * 1.05, 2.85, 9.0);
+    add(new THREE.BoxGeometry(1.0, 0.7, 0.08), glass, sx * 1.05, 3.2, 10.32);
+    add(new THREE.BoxGeometry(0.08, 0.6, 1.2), glass, sx * 1.64, 3.2, 9.4);
+    add(new THREE.SphereGeometry(0.16, 6, 4), new THREE.MeshStandardMaterial({ color: 0xfff2c0, emissive: 0x554422 }), sx * 1.1, 1.75, 10.3);
+    add(new THREE.BoxGeometry(0.5, 1.2, 5), body2, sx * 1.45, 2.6, -3);                  // equipment lockers
+    add(new THREE.BoxGeometry(0.5, 1.0, 3), body2, sx * 1.45, 2.5, 3.6);
+    add(new THREE.BoxGeometry(0.6, 0.5, 0.6), dark, sx * 1.9, 1.3, -1);                  // jacks
+    add(new THREE.BoxGeometry(0.6, 0.5, 0.6), dark, sx * 1.9, 1.3, -9.4);
+  }
+  add(new THREE.BoxGeometry(3.3, 0.5, 0.3), dark, 0, 1.3, 10.4);                         // bumper
+  add(new THREE.BoxGeometry(2.6, 1.3, 2.2), body2, 0, 2.6, -8.8);                         // erector base
+  // canister pivots at the rear
+  const canister = new THREE.Group(); canister.position.set(0, 2.9, -8.6); g.add(canister);
+  const tube = add(new THREE.CylinderGeometry(1.02, 1.02, 19.5, 14), body, 0, 0.55, 9.6, canister); tube.rotation.x = Math.PI / 2;
+  for (let k = 0; k < 6; k++) { const r = add(new THREE.CylinderGeometry(1.08, 1.08, 0.3, 14), body2, 0, 0.55, 1 + k * 3.5, canister); r.rotation.x = Math.PI / 2; }
+  const cap = add(new THREE.SphereGeometry(1.02, 12, 6, 0, Math.PI * 2, 0, Math.PI / 2), body2, 0, 0.55, 19.35, canister); cap.rotation.x = Math.PI / 2;
+  add(new THREE.CylinderGeometry(0.16, 0.16, 6, 6), dark, 0, -0.4, 5, canister).rotation.x = Math.PI / 2 - 0.12;   // hydraulic ram
+  const tip = new THREE.Object3D(); tip.position.set(0, 0.55, 20); canister.add(tip);
+  return { g, canister, tip, wheels, mats: [body, body2], color: new THREE.Color(color) };
+}
+// FPV kamikaze quadcopter with a warhead strapped underneath
+function buildDrone(color) {
+  const g = new THREE.Group(); g.rotation.order = 'YXZ';
+  const dark = new THREE.MeshStandardMaterial({ color: 0x1c1d1e, roughness: .6, metalness: .3, flatShading: true });
+  const teamM = new THREE.MeshStandardMaterial({ color, roughness: .7, flatShading: true });
+  const add = (geo, mat, x, y, z, parent = g) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = true; parent.add(m); return m; };
+  add(new THREE.BoxGeometry(0.34, 0.1, 0.62), dark, 0, 0, 0);
+  add(new THREE.BoxGeometry(0.26, 0.12, 0.36), teamM, 0, 0.11, -0.05);                 // battery
+  add(new THREE.BoxGeometry(0.12, 0.12, 0.1), dark, 0, 0.08, 0.32).rotation.x = -0.4;    // camera
+  const props = [];
+  for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+    const arm = add(new THREE.BoxGeometry(0.62, 0.05, 0.07), dark, sx * 0.27, 0, sz * 0.27); arm.rotation.y = sx * sz * -Math.PI / 4;
+    add(new THREE.CylinderGeometry(0.05, 0.05, 0.1, 6), dark, sx * 0.48, 0.06, sz * 0.48);
+    const p = add(new THREE.CylinderGeometry(0.24, 0.24, 0.012, 10), new THREE.MeshBasicMaterial({ color: 0x9aa0a4, transparent: true, opacity: 0.35, depthWrite: false }), sx * 0.48, 0.13, sz * 0.48);
+    add(new THREE.BoxGeometry(0.46, 0.014, 0.05), dark, 0, 0, 0, p); props.push(p);
+  }
+  const wh = add(new THREE.CylinderGeometry(0.07, 0.07, 0.6, 8), new THREE.MeshStandardMaterial({ color: 0x4d5536, flatShading: true }), 0, -0.13, 0.1); wh.rotation.x = Math.PI / 2;
+  add(new THREE.ConeGeometry(0.12, 0.34, 8), new THREE.MeshStandardMaterial({ color: 0x4d5536, flatShading: true }), 0, -0.13, 0.52).rotation.x = Math.PI / 2;
+  add(new THREE.CylinderGeometry(0.008, 0.008, 0.5, 3), dark, 0.1, 0.3, -0.28);         // antenna
+  g.scale.setScalar(1.5);
+  return { g, props, mats: [teamM], color: new THREE.Color(color) };
+}
 // ═══════════ PARTICLES ═══════════
 const particles = (() => {
   const cv = document.createElement('canvas'); cv.width = cv.height = 64;
@@ -1208,6 +1271,8 @@ function buildVis(type, team, n) {
   if (type === 'tank') { const v = buildTank(col, String(team ? 200 + n : 100 + n)); v.g.rotation.order = 'YXZ'; return v; }
   if (type === 'jeep') return buildJeep(col);
   if (type === 'gunner') return buildGunner(col);
+  if (type === 'icbm') return buildIcbm(col);
+  if (type === 'drone') return buildDrone(col);
   const dk = new THREE.MeshStandardMaterial({ color: 0x2a2c2d, roughness: .6, metalness: .5, flatShading: true });
   const part = (parent, geo, mat, x, y, z) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = true; parent.add(m); return m; };
   if (type === 'plane') {
@@ -1288,13 +1353,14 @@ function makeVehicle(d) {
   if (!d.alive) { v.vis.g.visible = false; }
   return v;
 }
-function spawnY(type, x, z) { return type === 'ship' ? 0 : type === 'plane' ? Math.max(H(x, z), 0) + 1.9 : Math.max(H(x, z), 0); }
+function spawnY(type, x, z) { return type === 'drone' ? Math.max(H(x, z), 0) + 0.35 : type === 'ship' ? 0 : type === 'plane' ? Math.max(H(x, z), 0) + 1.9 : Math.max(H(x, z), 0); }
 function resetVehicle(v, d) {
   const sp = d.spawn;
   v.pos.set(sp.x, spawnY(v.type, sp.x, sp.z), sp.z); v.tpos.copy(v.pos);
   v.h = v.th = sp.yaw; v.p = v.r = v.tp = v.tr = 0; v.speed = v.tspeed = 0;
   v.aimYaw = sp.yaw; v.aimPitch = 0; v.f1 = 0; v.f2 = 0; v.dead = null;
-  v.air = false; v.thr = 0; v.tel = 1; v.rudder = 0; v.crashSent = false; v.bombs = 3; v.rk = 8; v.loadT = 0;
+  v.air = false; v.thr = 0; v.tel = 1; v.rudder = 0; v.crashSent = false; v.bombs = 3; v.rk = 8; v.loadT = 0; v.bat = 100; v.erect = 0; v.tmode = false; v.mload = 0; v.icbms = 2; v.altPrev = false;
+  v.tgt = { x: BASES[1 - v.team].x, z: BASES[1 - v.team].z }; v.tzoom = 500;
   v.alive = true; v.hp = d.max || v.max;
   v.vis.g.visible = true;
   for (const m of v.vis.mats) m.color.copy(v.vis.color);
@@ -1304,7 +1370,7 @@ function resetVehicle(v, d) {
 function applyState(v, s, snap) {
   v.tpos.set(s[0], s[1], s[2]); v.th = s[3]; v.tp = s[4]; v.tr = s[5]; v.tspeed = s[6];
   v.aimYaw = s[7]; v.aimPitch = s[8]; v.f1 = s[9] || 0; v.f2 = s[10] || 0;
-  v.air = v.type === 'plane' && !!v.f1;
+  v.air = (v.type === 'plane' || v.type === 'drone') && !!v.f1;
   if (v.type === 'plane' && s[11] != null) { v.bombs = s[11]; v.rk = s[12] ?? v.rk; }
   v.recv = performance.now();
   if (snap) { v.pos.copy(v.tpos); v.h = v.th; v.p = v.tp; v.r = v.tr; v.speed = v.tspeed; }
@@ -1318,8 +1384,9 @@ function updateRemote(v, dt, now) {
   const driven = v.driver && v.driver !== myId;
   if (!driven) { v.speed *= Math.exp(-2 * dt); return; }
   const ex = Math.min(0.3, (now - v.recv) / 1000);
-  const f = fwd(v.th, v.type === 'plane' ? v.tp : 0, _v1);
-  const px = v.tpos.x + f.x * v.tspeed * ex, py = v.tpos.y + (v.type === 'plane' ? f.y * v.tspeed * ex : 0), pz = v.tpos.z + f.z * v.tspeed * ex;
+  const fly = v.type === 'plane' || v.type === 'drone';
+  const f = fwd(v.th, fly ? v.tp : 0, _v1);
+  const px = v.tpos.x + f.x * v.tspeed * ex, py = v.tpos.y + (fly ? f.y * v.tspeed * ex : 0), pz = v.tpos.z + f.z * v.tspeed * ex;
   const k = 1 - Math.exp(-dt * 10);
   if (v.pos.distanceTo(_v2.set(px, py, pz)) > 80) v.pos.set(px, py, pz);
   else { v.pos.x = lerp(v.pos.x, px, k); v.pos.y = lerp(v.pos.y, py, k); v.pos.z = lerp(v.pos.z, pz, k); }
@@ -1343,6 +1410,12 @@ function updateVis(v, dt) {
     v.vis.gun.rotation.x = -v.aimPitch;
     v.wheelA += v.speed * dt / 0.44;
     for (const w of v.vis.wheels) w.rotation.x = v.wheelA;
+  } else if (v.type === 'icbm') {
+    v.vis.canister.rotation.x = -v.f2 * 1.5;
+    v.wheelA += v.speed * dt / 0.82;
+    for (const w of v.vis.wheels) w.rotation.x = v.wheelA;
+  } else if (v.type === 'drone') {
+    if (v.air) for (const p of v.vis.props) p.rotation.y += dt * 60;
   } else if (v.type === 'gunner') {
     v.vis.turret.rotation.y = rel;
     v.vis.gun.rotation.x = -v.aimPitch;
@@ -1385,6 +1458,7 @@ function destroyVis(v) {
   particles.explosion(v.pos.clone().setY(v.pos.y + 2), big);
   audio.boom(v.pos, 1.3);
   if (v.type === 'tank' && v.vis.turret) v.vis.turret.rotation.z = 0.25;
+  if (v.type === 'drone') v.vis.g.visible = false;
 }
 function updateDead(v, dt) {
   const d = v.dead; d.t += dt;
@@ -1414,12 +1488,16 @@ const rocketGeo = new THREE.CylinderGeometry(0.16, 0.16, 1.8, 6); rocketGeo.rota
 const rocketMat = new THREE.MeshStandardMaterial({ color: 0xd8d6cc, roughness: .5 });
 const bombGeo = new THREE.CapsuleGeometry(0.28, 1.4, 3, 8); bombGeo.rotateX(Math.PI / 2);
 const bombMat = new THREE.MeshStandardMaterial({ color: 0x3d4630, roughness: .6 });
+const icbmGeo = (() => { const g = new THREE.CylinderGeometry(0.85, 0.85, 12, 10); g.rotateX(Math.PI / 2); return g; })();
+const icbmMat = new THREE.MeshStandardMaterial({ color: 0x5d6648, roughness: .5, metalness: .3 });
+const ICBM_T = 25, ICBM_R = 50;
 const GRAV = 9.8;
 const SPEC = {
   shell: { speed: 330, grav: 1, life: 6, geo: shellGeo, mat: shellMat, boom: 1.0 },
   navshell: { speed: 300, grav: 1, life: 8, geo: shellGeo, mat: shellMat, boom: 1.1 },
   mg: { speed: 650, grav: 0.3, life: 1.6, geo: bulletGeo, mat: tracerMat, len: 4 },
   cannon: { speed: 900, grav: 0.2, life: 1.4, geo: bulletGeo, mat: tracerMat, len: 7 },
+  icbm: { speed: 0, grav: 0, life: 60, geo: icbmGeo, mat: icbmMat, boom: 6, trail: true },
   bomb: { speed: 0, grav: 1.6, life: 25, geo: bombGeo, mat: bombMat, boom: 2.4, splash: 18 },
   rocket: { speed: 230, grav: 0.15, life: 8, geo: rocketGeo, mat: rocketMat, boom: 1.0, splash: 7, trail: true },
   navrocket: { speed: 170, grav: 0, life: 10, geo: rocketGeo, mat: rocketMat, boom: 1.2, splash: 9, trail: true },
@@ -1434,7 +1512,7 @@ function spawnShot(k, o, vel, mine, ownerVid, extra = {}) {
 }
 function teamOfVid(vid) { const v = vehicles.get(vid); return v ? v.team : -1; }
 function hitVehicle(v, k, pt, scale = 1) {
-  const dmg = Math.round(DMG[k][v.type] * scale);
+  const dmg = Math.round((DMG[k][v.type] ?? DMG[k].jeep) * scale);
   if (dmg <= 0) return;
   socket.emit('hit', { vid: v.vid, dmg, k, pt: [+pt.x.toFixed(1), +pt.y.toFixed(1), +pt.z.toFixed(1)] });
 }
@@ -1459,6 +1537,17 @@ function updateShots(dt) {
   for (let i = shots.length - 1; i >= 0; i--) {
     const s = shots[i], sp = SPEC[s.k];
     s.age += dt;
+    if (s.k === 'icbm') {   // ballistic arc: up, over the top, down onto the target
+      if (!s.o0) s.o0 = s.pos.clone();
+      const u = Math.min(1, s.age / ICBM_T), e = u * u * (3 - 2 * u);
+      const px = s.pos.x, py = s.pos.y, pz = s.pos.z;
+      s.pos.set(lerp(s.o0.x, s.target.x, e), lerp(s.o0.y, s.target.y, u) + 1100 * 4 * u * (1 - u), lerp(s.o0.z, s.target.z, e));
+      s.vel.set(s.pos.x - px, s.pos.y - py, s.pos.z - pz); if (s.vel.lengthSq() < 1e-6) s.vel.set(0, 1, 0);
+      s.mesh.position.copy(s.pos); s.mesh.lookAt(_v1.copy(s.pos).add(s.vel));
+      for (let k = 0; k < 3; k++) { particles.mtrail(_v1.copy(s.pos).addScaledVector(s.vel, -k * 0.3)); particles.mflame(s.pos); }
+      if (u >= 1) { icbmImpact(s); scene.remove(s.mesh); shots.splice(i, 1); }
+      continue;
+    }
     // guided naval rockets: climb, then dive onto the target point
     const tvv = s.tv ? vehicles.get(s.tv) : null;
     if (tvv && tvv.alive && !(s.k === 'rocket' && s.age > 7)) { (s.target || (s.target = new THREE.Vector3())).copy(tvv.pos); s.target.y += tvv.type === 'ship' ? 4 : 1.2; }
@@ -1498,9 +1587,25 @@ socket.on('shot', (pid, s) => {
   const o = new THREE.Vector3(...s.o), vel = new THREE.Vector3(...s.v);
   spawnShot(s.k, o, vel, false, s.vid, Object.assign(s.t ? { target: new THREE.Vector3(...s.t) } : {}, s.tv ? { tv: s.tv } : {}));
   if (s.tv && s.tv === myVid) { logMsg('<b style="color:#ff6a50">По вам пущена ракета!</b>'); audio.tone(1300, 0.25, 0.07); }
+  if (s.k === 'icbm') { centerMsg('РАКЕТНЫЙ УДАР!', 'цель отмечена на карте · ' + ICBM_T + ' с до удара', 4000, '#ff5a46'); for (let k = 0; k < 6; k++) setTimeout(() => audio.tone(k % 2 ? 620 : 880, 0.3, 0.07), k * 330); audio.at('shoot', o, 2, 0.4, 3000); return; }
   if (s.k === 'mg' || s.k === 'cannon') { if (Math.random() < 0.5) audio.at('shoot', o, 0.25, s.k === 'mg' ? 1.9 : 2.4, 700); }
   else { audio.at('shoot', o, s.k === 'navshell' ? 1.2 : 1, s.k.includes('rocket') ? 0.6 : 0.8); particles.muzzle(o, vel.clone().normalize()); }
 });
+function icbmImpact(s) {
+  const pt = s.target;
+  particles.explosion(pt, 7);
+  for (let k = 0; k < 10; k++) { const a = k / 10 * TAU; setTimeout(() => particles.explosion(new THREE.Vector3(pt.x + Math.cos(a) * 22, pt.y + 2, pt.z + Math.sin(a) * 22), 3), 80 + k * 60); }
+  audio.boom(pt, 2.5); setTimeout(() => audio.boom(pt, 2), 250);
+  shake = Math.max(shake, Math.max(0.2, 1.4 - pt.distanceTo(camera.position) / 700));
+  if (!s.mine) return;
+  const myT = teamOfVid(s.ownerVid);
+  for (const o of vehicles.values()) {
+    if (!o.alive || o.team === myT) continue;
+    const d = Math.hypot(o.pos.x - pt.x, o.pos.z - pt.z);
+    if (d > ICBM_R) continue;
+    socket.emit('hit', { vid: o.vid, dmg: d < 16 ? 300 : Math.round(150 * (1 - d / ICBM_R)), k: 'icbm', pt: [+o.pos.x.toFixed(1), +o.pos.y.toFixed(1), +o.pos.z.toFixed(1)] });
+  }
+}
 function fireShot(k, o, dir, extra = {}) {
   const vel = dir.clone().multiplyScalar(SPEC[k].speed);
   if (extra.inherit) vel.add(extra.inherit);
@@ -1593,7 +1698,7 @@ function updateSams(dt) {
 // ═══════════ INPUT ═══════════
 const keys = {};
 let camYaw = 0, camPitch = -0.1, camDist = 14, zoom = false, mouseFire = false, mouseAlt = false, locked = false, chatOpen = false, quietUnlock = false;
-const CAM = { tank: [9, 34, 15], jeep: [7, 28, 11], plane: [16, 60, 26], ship: [40, 140, 70], gunner: [3, 12, 6] };   // min, max, default distance
+const CAM = { tank: [9, 34, 15], jeep: [7, 28, 11], plane: [16, 60, 26], ship: [40, 140, 70], gunner: [3, 12, 6], icbm: [16, 55, 26], drone: [0, 0, 0] };   // min, max, default distance
 addEventListener('keydown', e => {
   if (chatOpen) {
     if (e.key === 'Enter') { const t = $('chatin').value.trim(); if (t) socket.emit('chat', t); closeChat(); }
@@ -1643,6 +1748,8 @@ document.addEventListener('pointerlockchange', () => {
 addEventListener('mousemove', e => {
   if (mode === 'cmd') return cmdMouseMove(e);
   if (!locked) return;
+  const tv0 = myVehicle();
+  if (tv0 && tv0.tmode) { const k = tv0.tzoom / innerHeight * 1.5; tv0.tgt.x = Math.max(-MAP_X, Math.min(MAP_X, tv0.tgt.x + e.movementX * k)); tv0.tgt.z = Math.max(-MAP_Z, Math.min(MAP_Z + 300, tv0.tgt.z + e.movementY * k)); return; }
   const s = zoom ? 0.0006 : 0.0021;
   camYaw -= e.movementX * s;
   camPitch = Math.max(-1.2, Math.min(1.2, camPitch - e.movementY * s));
@@ -1652,9 +1759,10 @@ addEventListener('wheel', e => {
   if (mode === 'cmd') return cmdWheel(e);
   const v = myVehicle(); if (!v) return;
   const c = CAM[v.type];
+  if (v.tmode) { v.tzoom = Math.max(200, Math.min(1400, v.tzoom * (e.deltaY > 0 ? 1.15 : 0.87))); return; }
   if (e.deltaY > 0 && camDist >= c[1] - 0.01) {
     // scrolled out past the farthest view: rise to the commander view
-    if (v.type === 'plane' && v.air) { logMsg('В воздухе: <b>X</b> — покинуть самолёт (он разобьётся)'); return; }
+    if ((v.type === 'plane' || v.type === 'drone') && v.air) { logMsg('В воздухе: <b>X</b> — бросить управление (аппарат разобьётся)'); return; }
     leaveVehicle(false);
     return;
   }
@@ -1707,7 +1815,7 @@ function blocked(x, z, r, self) {
   for (const b of world.boxes) if (Math.abs(x - b.x) < b.hx + r && Math.abs(z - b.z) < b.hz + r && b.y1 > H(x, z) + 0.5) return true;
   for (const o of vehicles.values()) {
     if (o === self || !o.vis.g.visible || o.type === 'plane' && o.air) continue;
-    const rr = o.type === 'ship' ? 0 : o.type === 'tank' ? 3.2 : o.type === 'plane' ? 6 : o.type === 'gunner' ? 2 : 2.4;
+    const rr = o.type === 'ship' ? 0 : o.type === 'tank' ? 3.2 : o.type === 'plane' ? 6 : o.type === 'gunner' ? 2 : o.type === 'drone' ? 0 : o.type === 'icbm' ? 6 : 2.4;
     if (rr && Math.hypot(x - o.pos.x, z - o.pos.z) < r + rr) return true;
   }
   return Math.abs(x) > MAP_X - 60 || z < -MAP_Z + 60 || z > MAP_Z;
@@ -1938,6 +2046,95 @@ function driveGunner(v, dt, frozen) {
   } else v.fireAcc = Math.min(v.fireAcc, 0.075);
   audio.engineOff();
 }
+function driveIcbm(v, dt, frozen) {
+  v.mload = Math.max(0, v.mload - dt);
+  const thr = chatOpen ? 0 : (keys.KeyW || keys.ArrowUp ? 1 : 0) - (keys.KeyS || keys.ArrowDown ? 1 : 0);
+  const steer = chatOpen ? 0 : (keys.KeyA || keys.ArrowLeft ? 1 : 0) - (keys.KeyD || keys.ArrowRight ? 1 : 0);
+  const stowed = !v.tmode && v.erect <= 0.01;
+  const target = stowed ? (thr > 0 ? 10 : thr < 0 ? -4 : 0) : 0;
+  v.speed += Math.max(-5 * dt, Math.min(2.2 * dt, target - v.speed));
+  if (!stowed && thr) warnText = 'РАКЕТА ПОДНЯТА — ПКМ, ЧТОБЫ ОПУСТИТЬ И ЕХАТЬ';
+  if (!frozen && Math.abs(v.speed) > 0.01) {
+    const nh = wrap(v.h + steer * 0.3 * Math.max(-1, Math.min(1, v.speed / 5)) * dt);
+    const nx = v.pos.x + Math.sin(nh) * v.speed * dt, nz = v.pos.z + Math.cos(nh) * v.speed * dt;
+    let bad = H(nx, nz) < -1;
+    for (const off of [8, 0, -8]) if (blocked(nx + Math.sin(nh) * off, nz + Math.cos(nh) * off, 2.2, v)) bad = true;
+    if (bad) v.speed *= -0.2; else { v.pos.x = nx; v.pos.z = nz; v.h = nh; }
+  }
+  const gf = groundFollow(v, v.pos.x, v.pos.z, 8, 1.6);
+  v.pos.y = gf.y; v.p += (gf.p - v.p) * Math.min(1, dt * 5); v.r += (gf.r - v.r) * Math.min(1, dt * 5);
+  // right-click / Q: raise the missile and open the targeting view
+  if (mouseAlt && !v.altPrev) {
+    if (!v.tmode && Math.abs(v.speed) > 1) logMsg('Сначала остановитесь');
+    else if (!v.tmode && v.icbms <= 0) logMsg('Ракет больше нет');
+    else { v.tmode = !v.tmode; audio.tone(v.tmode ? 520 : 380, 0.1, 0.05); }
+  }
+  v.altPrev = mouseAlt;
+  v.erect = Math.max(0, Math.min(1, v.erect + (v.tmode ? dt / 7 : -dt / 5)));
+  if (v.tmode) {
+    const far = Math.hypot(v.tgt.x - v.pos.x, v.tgt.z - v.pos.z);
+    warnText = v.erect < 1 ? 'ПОДЪЁМ РАКЕТЫ ' + Math.round(v.erect * 100) + '%' : v.mload > 0 ? 'ПЕРЕЗАРЯДКА ' + Math.ceil(v.mload) + ' с' : far < 350 ? 'ЦЕЛЬ СЛИШКОМ БЛИЗКО' : 'КЛИК — ПУСК · ПКМ — ОТМЕНА';
+    if (mouseFire && v.erect >= 1 && v.mload <= 0 && far >= 350 && v.icbms > 0 && !frozen && !chatOpen) {
+      mouseFire = false; v.icbms--; v.mload = 90;
+      v.vis.g.updateMatrixWorld(true);
+      const o = v.vis.tip.getWorldPosition(new THREE.Vector3());
+      const tgt = new THREE.Vector3(v.tgt.x, Math.max(H(v.tgt.x, v.tgt.z), 0), v.tgt.z);
+      fireShot('icbm', o, new THREE.Vector3(0, 1, 0), { target: tgt });
+      particles.explosion(o, 1.5); audio.play('shoot', 1.6, 0, 0.4); audio.whoosh(1.2); shake = 1;
+      centerMsg('ПУСК!', 'удар через ' + ICBM_T + ' с · осталось ракет: ' + v.icbms, 3000, '#ffb03a');
+      if (v.icbms <= 0) v.tmode = false;
+    }
+  }
+  v.f1 = v.tmode ? 1 : 0; v.f2 = +v.erect.toFixed(2);
+  v.aimYaw = v.h;
+  audio.engine('tank', Math.abs(thr) * (stowed ? 1 : 0), Math.abs(v.speed) / 10);
+}
+function droneBoom(v, pt, hit) {
+  if (v.crashSent) return;
+  particles.explosion(pt, 1.3); audio.boom(pt, 1.1);
+  if (hit && hit.kind === 'veh' && hit.v.team !== v.team && hit.v.alive) hitVehicle(hit.v, 'fpv', pt);
+  for (const o of vehicles.values()) {
+    if (!o.alive || o.team === v.team || o === v || (hit && hit.v === o)) continue;
+    const d = o.pos.distanceTo(pt);
+    if (d < 8) hitVehicle(o, 'fpv', pt, 0.5 * (1 - d / 8));
+  }
+  crashMine(v, 'fpv');
+}
+function driveDrone(v, dt, frozen) {
+  if (!chatOpen) {
+    if (keys.KeyW || keys.ArrowUp) v.thr = Math.min(1, v.thr + 1.2 * dt);
+    if (keys.KeyS || keys.ArrowDown) v.thr = Math.max(0, v.thr - 1.6 * dt);
+  }
+  v.f2 = v.thr;
+  if (!v.air) {
+    v.f1 = 0; v.speed = 0;
+    warnText = 'W — ВЗЛЁТ';
+    if (v.thr > 0.05 && !frozen) { v.air = true; v.pos.y += 0.8; v.h = camYaw; logMsg('FPV в воздухе: летит туда, куда смотрите · W/S — скорость'); }
+    audio.engine('jeep', v.thr, 0);
+    return;
+  }
+  v.bat -= dt;
+  const dh = wrap(camYaw - v.h);
+  v.h = wrap(v.h + Math.max(-3.5, Math.min(3.5, dh * 7)) * dt);
+  v.p += Math.max(-3, Math.min(3, (camPitch - v.p) * 7)) * dt;
+  v.r += (Math.max(-0.9, Math.min(0.9, -dh * 2.5)) - v.r) * (1 - Math.exp(-6 * dt));
+  v.speed += (v.thr * 42 - v.speed) * Math.min(1, 2.5 * dt);
+  if (v.bat <= 0) { warnText = 'БАТАРЕЯ РАЗРЯЖЕНА'; v.p = Math.max(-1.3, v.p - 2 * dt); v.speed = Math.max(v.speed, 18); }
+  else if (v.bat < 20) warnText = 'БАТАРЕЯ ' + Math.ceil(v.bat) + ' с';
+  if (!frozen) {
+    const f = fwd(v.h, v.p, _v1), step = v.speed * dt;
+    if (step > 0.001) {
+      _o3[0] = v.pos.x; _o3[1] = v.pos.y; _o3[2] = v.pos.z; _d3[0] = f.x; _d3[1] = f.y; _d3[2] = f.z;
+      const hit = castRay(_o3, _d3, step + 0.9, v.vid, { step: 1 });
+      if (hit) return droneBoom(v, new THREE.Vector3(_o3[0] + f.x * hit.t, _o3[1] + f.y * hit.t, _o3[2] + f.z * hit.t), hit);
+      v.pos.addScaledVector(f, step);
+    }
+    if (v.pos.y < Math.max(H(v.pos.x, v.pos.z), 0) + 0.3) return droneBoom(v, v.pos.clone(), null);
+    if (v.pos.y > 500) v.pos.y = 500;
+  }
+  v.f1 = 1; v.aimYaw = v.h; v.aimPitch = v.p;
+  audio.engine('jeep', 0.5 + v.thr * 0.5, 0.4 + v.speed / 70);
+}
 function dropFlares() {
   const v = myVehicle();
   if (!v || !v.air || flares <= 0 || flareCd > 0) return;
@@ -2011,10 +2208,12 @@ function updateMe(dt, now) {
   warnText = '';
   if (mode !== 'drive' || !v || !v.alive) { audio.engineOff(); return; }
   const frozen = now < matchStartAt;
-  zoom = !!(keys.ShiftLeft || keys.ShiftRight) && v.type !== 'plane';
+  zoom = !!(keys.ShiftLeft || keys.ShiftRight) && v.type !== 'plane' && v.type !== 'drone';
   if (v.type === 'tank' || v.type === 'jeep') driveGround(v, dt, frozen);
   else if (v.type === 'plane') drivePlane(v, dt, frozen);
   else if (v.type === 'gunner') driveGunner(v, dt, frozen);
+  else if (v.type === 'icbm') driveIcbm(v, dt, frozen);
+  else if (v.type === 'drone') driveDrone(v, dt, frozen);
   else driveShip(v, dt, frozen);
   if (v.type === 'plane') { v.aimYaw = v.h; v.aimPitch = v.p; }
   // repair at home
@@ -2107,12 +2306,13 @@ function takeControl(v) {
   camTrans = 1; camTransAt = performance.now();
   document.body.classList.remove('cmdv');
   $('cmdtip').style.display = 'none'; canvas.style.cursor = '';
-  centerMsg(vName(v).toUpperCase(), v.type === 'plane' ? 'W — тяга · разгон и мышь вверх' : v.type === 'gunner' ? 'Мышь — прицел · клик — огонь · колесо вниз — выйти' : 'Колесо вниз — наверх, к выбору техники', 1500);
+  centerMsg(vName(v).toUpperCase(), v.type === 'plane' ? 'W — тяга · разгон и мышь вверх' : v.type === 'gunner' ? 'Мышь — прицел · клик — огонь · колесо вниз — выйти' : v.type === 'icbm' ? 'WASD — ехать · остановитесь и ПКМ — наведение ракеты' : v.type === 'drone' ? 'W — взлёт · летит за мышью · взрывается при ударе' : 'Колесо вниз — наверх, к выбору техники', 1500);
   lockPointer();
 }
 function leaveVehicle(force) {
   const v = myVehicle();
-  if (v && v.type === 'plane' && v.air && v.alive) { if (!force) return; crashMine(v, 'abandon'); }
+  if (v && (v.type === 'plane' || v.type === 'drone') && v.air && v.alive) { if (!force) return; crashMine(v, 'abandon'); }
+  if (v) v.tmode = false;
   socket.emit('exit');
   goCommander(v);
 }
@@ -2147,6 +2347,22 @@ function renderCmdList() {
 // ═══════════ VEHICLE CAMERA ═══════════
 function updateDriveCam(dt) {
   const v = myVehicle(); if (!v) return;
+  if (v.type === 'drone') {   // first-person view through the drone's camera
+    camera.fov = lerp(camera.fov, 100, 1 - Math.exp(-10 * dt)); camera.updateProjectionMatrix();
+    const f = v.air ? fwd(v.h, v.p, _v1) : fwd(camYaw, camPitch, _v1);
+    camera.position.copy(v.pos).addScaledVector(f, 0.5); camera.position.y += 0.15;
+    camera.lookAt(_v2.copy(camera.position).add(f));
+    camera.rotateZ(-v.r * 0.8);
+    camTrans = 0; setShadowSize(120); placeSun(v.pos.x, Math.max(0, H(v.pos.x, v.pos.z)), v.pos.z);
+    return;
+  }
+  if (v.tmode) {              // SS-27 targeting: top view over the target point
+    const gy = Math.max(0, H(v.tgt.x, v.tgt.z));
+    camera.fov = 50; camera.updateProjectionMatrix();
+    camera.position.set(v.tgt.x, gy + v.tzoom, v.tgt.z + v.tzoom * 0.45); camera.lookAt(v.tgt.x, gy, v.tgt.z);
+    camTrans = 0; setShadowSize(Math.min(600, v.tzoom)); placeSun(v.tgt.x, gy, v.tgt.z);
+    return;
+  }
   const d = fwd(camYaw, camPitch, _v1);
   const base = _v4.copy(v.pos); base.y += v.type === 'ship' ? 10 : v.type === 'plane' ? 2.5 : v.type === 'gunner' ? 2.3 : 2.6;
   const cp = _v3.copy(base).addScaledVector(d, -camDist);
@@ -2182,7 +2398,31 @@ function drawHud(now, dt) {
   if (!inGame) return;
   if (mode === 'cmd') return drawCmdHud(c, w, h, now);
   const v = myVehicle(); if (!v || !v.alive) return;
-  if (v.type === 'plane') {
+  if (v.type === 'drone') {
+    // FPV goggles: OSD text, crosshair, scan lines
+    c.strokeStyle = 'rgba(255,255,255,.85)'; c.lineWidth = 2; c.beginPath(); c.moveTo(w / 2 - 22, h / 2); c.lineTo(w / 2 - 7, h / 2); c.moveTo(w / 2 + 7, h / 2); c.lineTo(w / 2 + 22, h / 2); c.moveTo(w / 2, h / 2 + 7); c.lineTo(w / 2, h / 2 + 18); c.stroke();
+    c.fillStyle = 'rgba(0,0,0,.07)'; for (let y = (now / 30) % 4; y < h; y += 4) c.fillRect(0, y, w, 1);
+    const gr = c.createRadialGradient(w / 2, h / 2, h * 0.35, w / 2, h / 2, h * 0.85); gr.addColorStop(0, 'rgba(0,0,0,0)'); gr.addColorStop(1, 'rgba(0,0,0,.55)'); c.fillStyle = gr; c.fillRect(0, 0, w, h);
+    c.font = '700 13px monospace'; c.fillStyle = '#f3f1e8'; c.textAlign = 'left';
+    c.fillText('FPV · ' + (v.air ? 'ARMED' : 'ON GROUND'), 24, 96);
+    c.fillText('BAT ' + Math.max(0, Math.ceil(v.bat)) + 's', 24, 116); c.fillText('SPD ' + Math.round(v.speed * 3.6) + ' km/h', 24, 136);
+    c.fillText('ALT ' + Math.round(v.pos.y - Math.max(0, H(v.pos.x, v.pos.z))) + ' m', 24, 156); c.fillText('THR ' + Math.round(v.thr * 100) + '%', 24, 176);
+    c.fillStyle = v.bat < 20 ? '#ff5a46' : '#9bdc6a'; c.fillRect(24, 184, Math.max(0, v.bat) * 1.2, 5);
+    if (Math.random() < 0.04) { c.fillStyle = 'rgba(255,255,255,.08)'; c.fillRect(0, Math.random() * h, w, 6 + Math.random() * 20); }
+  } else if (v.type === 'icbm') {
+    if (v.tmode) {
+      const p = project(_v1.set(v.tgt.x, Math.max(0, H(v.tgt.x, v.tgt.z)), v.tgt.z));
+      if (p) {
+        const e = project(_v2.set(v.tgt.x + ICBM_R, _v1.y, v.tgt.z)); const r = e ? Math.abs(e[0] - p[0]) : 60;
+        c.strokeStyle = '#ff4a36'; c.lineWidth = 2.5; c.beginPath(); c.arc(p[0], p[1], r, 0, TAU); c.stroke();
+        c.setLineDash([6, 6]); c.beginPath(); c.arc(p[0], p[1], r * 0.32, 0, TAU); c.stroke(); c.setLineDash([]);
+        c.beginPath(); c.moveTo(p[0] - r - 14, p[1]); c.lineTo(p[0] + r + 14, p[1]); c.moveTo(p[0], p[1] - r - 14); c.lineTo(p[0], p[1] + r + 14); c.stroke();
+        c.fillStyle = '#ff4a36'; c.font = '800 12px Unbounded'; c.textAlign = 'center';
+        c.fillText('ЦЕЛЬ · ' + Math.round(Math.hypot(v.tgt.x - v.pos.x, v.tgt.z - v.pos.z)) + ' м · ракет: ' + v.icbms, p[0], p[1] - r - 22);
+      }
+      c.fillStyle = 'rgba(243,241,232,.8)'; c.font = '700 10px Unbounded'; c.textAlign = 'center'; c.fillText('Мышь — двигать цель · колесо — масштаб · клик — пуск · ПКМ — выйти', w / 2, h - 130);
+    } else { c.fillStyle = 'rgba(243,241,232,.8)'; c.font = '700 10px Unbounded'; c.textAlign = 'center'; c.fillText(v.icbms > 0 ? 'Остановитесь и нажмите ПКМ — наведение ракеты' : 'Ракеты израсходованы', w / 2, h * 0.3); }
+  } else if (v.type === 'plane') {
     // mouse-aim circle + where the guns point
     const pa = project(_v1.copy(camera.position).addScaledVector(fwd(camYaw, camPitch, _v2), 600));
     if (pa) ring(c, pa[0], pa[1], 11, 'rgba(255,255,255,.85)', 1.5);
@@ -2242,7 +2482,11 @@ function drawThreats(c, w, h, dt) {
   warnBeepT -= dt;
   const incoming = sams.filter(m => m.target === myVid && !m.decoy && m.age < SAM_HOME);
   const rk = shots.find(s => s.tv === myVid && !s.mine);
-  if (rk) {
+  const nuke = shots.find(s => s.k === 'icbm' && v && Math.hypot(s.target.x - v.pos.x, s.target.z - v.pos.z) < ICBM_R + 30);
+  if (nuke) {
+    el.style.display = 'block'; el.className = ''; el.textContent = 'РАКЕТНЫЙ УДАР ПО ВАМ! ' + Math.max(0, Math.ceil(ICBM_T - nuke.age)) + ' с — УХОДИТЕ';
+    if (warnBeepT <= 0) { audio.tone(700, 0.15, 0.06); warnBeepT = 0.35; }
+  } else if (rk) {
     el.style.display = 'block'; el.className = ''; el.textContent = 'РАКЕТА! ' + Math.round(rk.pos.distanceTo(v.pos)) + ' м' + (v.type === 'plane' ? ' · F — ЛОВУШКИ (' + flares + ')' : '');
     if (warnBeepT <= 0) { audio.tone(1200, 0.08, 0.06); warnBeepT = 0.14; }
   } else if (incoming.length) {
@@ -2327,6 +2571,8 @@ function updateBottom() {
   if (v.type === 'tank') { set(2, 'ПРИЦЕЛ', aimHit ? Math.round(aimHit.t) + ' м' : '—'); bar(3, 'ПУШКА', 1 - reload / 4, reload > 0 ? '#e3a53c' : '#9bdc6a'); bar(4, 'БРОНЯ', k, '#9aa39a'); set(5, 'SHIFT', 'ПРИЦЕЛ'); }
   else if (v.type === 'jeep') { set(2, 'ПРИЦЕЛ', aimHit ? Math.round(aimHit.t) + ' м' : '—'); bar(3, 'ПУЛЕМЁТ', 1, '#9bdc6a'); bar(4, 'КОРПУС', k, '#9aa39a'); set(5, 'КЛИК', 'ОГОНЬ'); }
   else if (v.type === 'plane') { set(2, 'ВЫСОТА', Math.round(v.pos.y - Math.max(0, H(v.pos.x, v.pos.z))) + ' м'); bar(3, 'ТЯГА', v.thr, '#8fc3e8'); bar(4, 'РАКЕТЫ ' + v.rk + ' · ПКМ', v.rk / 8, '#ffb03a'); set(5, 'БОМБЫ · ПРОБЕЛ', v.bombs + ' / 3'); }
+  else if (v.type === 'icbm') { set(2, 'РАКЕТЫ', v.icbms + ' / 2'); bar(3, 'ПОДЪЁМ', v.erect, '#ffb03a'); bar(4, 'ПЕРЕЗАРЯДКА', 1 - v.mload / 90, v.mload > 0 ? '#e3a53c' : '#9bdc6a'); set(5, 'ПКМ', v.tmode ? 'ОТМЕНА' : 'НАВЕДЕНИЕ'); }
+  else if (v.type === 'drone') { set(2, 'БАТАРЕЯ', Math.max(0, Math.ceil(v.bat)) + ' с'); bar(3, 'ТЯГА', v.thr, '#8fc3e8'); bar(4, 'ЗАРЯД', v.bat / 100, '#9bdc6a'); set(5, 'УДАР', 'ВЗРЫВ'); }
   else if (v.type === 'gunner') { set(1, 'ПОСТ', 'ПУЛЕМЁТ'); set(2, 'ПРИЦЕЛ', aimHit ? Math.round(aimHit.t) + ' м' : '—'); bar(3, 'ПУЛЕМЁТ', 1, '#9bdc6a'); bar(4, 'УКРЫТИЕ', k, '#9aa39a'); set(5, 'КЛИК', 'ОГОНЬ'); }
   else { set(2, 'ХОД', SHIP_TEL_TXT[v.tel]); bar(3, 'ОРУДИЯ', 1 - reload / 5, reload > 0 ? '#e3a53c' : '#9bdc6a'); bar(4, 'РАКЕТЫ · ПКМ', 1 - reload2 / 18, reload2 > 0 ? '#e3a53c' : '#ffb03a'); set(5, 'КОРПУС', Math.round(k * 100) + '%'); }
 }
@@ -2377,6 +2623,9 @@ function drawMinimap() {
     if (v.vid === myVid) { c.strokeStyle = '#111'; c.lineWidth = 1.5; c.stroke(); }
     c.restore();
   }
+  for (const s of shots) if (s.k === 'icbm') { const [x, y] = mmP(s.target.x, s.target.z), [mx, my] = mmP(s.pos.x, s.pos.z); const pr = 8 + (performance.now() / 120) % 14;
+    c.strokeStyle = '#ff3a26'; c.lineWidth = 3; c.beginPath(); c.arc(x, y, pr, 0, TAU); c.stroke(); c.fillStyle = '#ff3a26'; c.beginPath(); c.arc(x, y, 4, 0, TAU); c.fill(); c.fillStyle = '#fff'; c.fillRect(mx - 3, my - 3, 6, 6); }
+  const tv = myVehicle(); if (tv && tv.tmode) { const [x, y] = mmP(tv.tgt.x, tv.tgt.z); c.strokeStyle = '#ffb03a'; c.lineWidth = 2; c.beginPath(); c.moveTo(x - 9, y); c.lineTo(x + 9, y); c.moveTo(x, y - 9); c.lineTo(x, y + 9); c.stroke(); }
   if (mode === 'cmd') { const [x, y] = mmP(cmd.x, cmd.z); const ww = cmd.h * 1.2 / (2 * MMX) * MMW; c.strokeStyle = 'rgba(255,255,255,.7)'; c.lineWidth = 1.5; c.strokeRect(x - ww, y - ww * 0.7, ww * 2, ww * 1.4); }
 }
 mm.addEventListener('mousedown', e => {
@@ -2477,7 +2726,7 @@ socket.on('vdead', d => {
   destroyVis(v);
   const mine = d.vid === myVid;
   v.driver = null;
-  const how = d.how === 'water' ? 'утонул' : d.how === 'abandon' ? 'брошен' : d.how === 'crash' ? 'разбился' : d.how === 'sam' ? 'сбит ПВО' : '';
+  const how = d.how === 'water' ? 'утонул' : d.how === 'abandon' ? 'брошен' : d.how === 'crash' ? 'разбился' : d.how === 'sam' ? 'сбит ПВО' : d.how === 'fpv' ? 'взорвался' : d.how === 'icbm' ? 'ракетный удар' : '';
   const vic = `<b style="color:${TEAM_CSS[v.team]}">${TYPE_ICON[v.type]} ${d.driver ? nameOf(d.driver) : vName(v)}</b>`;
   feed(d.by ? `<b style="color:${TEAM_CSS[1 - v.team]}">${nameOf(d.by)}</b><span class="x">✕</span>${vic}` : `${vic}<span class="x">${how || '✕'}</span>`);
   if (d.by === myId) centerMsg('УНИЧТОЖЕН', vName(v).toUpperCase(), 1500, '#ff7a68');
