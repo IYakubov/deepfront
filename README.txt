@@ -16,7 +16,7 @@ PLAY
   Click one of your vehicles (on the map or in the list on the left) to get in.
   Scroll the mouse wheel out past the farthest camera (or press X) to rise back to the
   commander view and pick another vehicle. Each team has 30 reinforcement points; every
-  destroyed vehicle costs one and is back at its base after 25 s. 20-minute matches.
+  Destroyed vehicles do not come back: the team that still has machines wins.
 
 CONTROLS
   Commander view: WASD / right-drag to move the map, wheel = height, click the minimap to jump.
@@ -24,7 +24,8 @@ CONTROLS
   Jeep: WASD drive (fast), hold click for the machine gun.
   Jet: starts parked on the runway. W/S throttle, A/D steer on the ground. Over 200 km/h
        move the mouse up to take off. In the air it follows the mouse. Click = cannon,
-       right-click / Q = rockets (8, reload one every 3 s), F = flares.
+       keep an enemy ahead of the nose 1.5 s to lock, right-click / Q = homing rockets (8),
+       Space = bomb (3), F = flares. Rearm: land at your base and stand still 30 s.
        Landing: flat ground (the runway), under ~290 km/h, wings level, gentle angle; S brakes.
        Leaving a jet in the air (X) means it crashes.
   Warship: W/S engine telegraph, A/D rudder, click = salvo from every turret that bears,

@@ -19,16 +19,16 @@ const PORT = process.env.PORT || 3000;
 
 // ── game constants (keep in sync with client) ──
 const MAX_PLAYERS = 16;
-const TICKETS = 30;              // every destroyed vehicle costs its team one ticket
-const MATCH_TIME = 20 * 60;      // seconds
-const RESPAWN = 25;              // seconds until a destroyed vehicle is back at its base
-const HP = { tank: 120, jeep: 50, plane: 70, ship: 260 };
+const MATCH_TIME = 60 * 60;      // safety cap, seconds; normally a match ends when one side has no machines left
+const HP = { tank: 120, jeep: 50, plane: 70, ship: 260, gunner: 40 };
+const MACHINES = 10;             // per team; machine-gun posts don't count
 // base layout for team 0 (west); team 1 is mirrored in x
 const LAYOUT = [
   ['tank', -1110, -10, Math.PI / 2], ['tank', -1110, 25, Math.PI / 2], ['tank', -1110, 60, Math.PI / 2],
   ['jeep', -1170, 150, Math.PI / 2], ['jeep', -1150, 165, Math.PI / 2], ['jeep', -1130, 180, Math.PI / 2],
   ['plane', -1430, -262, Math.PI / 2], ['plane', -1395, -238, Math.PI / 2],
   ['ship', -1260, 560, 0.25], ['ship', -1150, 590, 0.25],
+  ['gunner', -985, 40, Math.PI / 2], ['gunner', -1010, 215, Math.PI / 2], ['gunner', -1150, 405, 0],
 ];
 
 const rooms = new Map();
@@ -59,9 +59,10 @@ function publicRoom(r) {
     code: r.code, hostId: r.hostId, state: r.state, mode: 'team', seed: r.seed, tickets: r.tickets,
     timeLeft: r.endsAt && r.state === 'playing' ? Math.max(0, r.endsAt - Date.now()) : null,
     players: [...r.players.values()].map(p => ({ id: p.id, name: p.name, team: p.team, vid: p.vid, kills: p.kills, deaths: p.deaths, dmg: p.dmg })),
-    vehicles: r.vehicles.map(v => ({ vid: v.vid, team: v.team, type: v.type, n: v.n, hp: v.hp, max: v.max, alive: v.alive, driver: v.driver, spawn: v.spawn, st: v.st, respawnIn: v.alive ? 0 : Math.max(0, v.respawnAt - Date.now()) }))
+    vehicles: r.vehicles.map(v => ({ vid: v.vid, team: v.team, type: v.type, n: v.n, hp: v.hp, max: v.max, alive: v.alive, driver: v.driver, spawn: v.spawn, st: v.st, }))
   };
 }
+function countMachines(r) { r.tickets = [0, 1].map(t => r.vehicles.filter(v => v.team === t && v.alive && v.type !== 'gunner').length); }
 function broadcastRoom(r) { io.to(r.code).emit('room', publicRoom(r)); }
 function teamCount(r, t) { let n = 0; for (const p of r.players.values()) if (p.team === t) n++; return n; }
 function rebalance(r) {
@@ -76,7 +77,7 @@ function startMatch(r) {
   clearInterval(r.tick);
   r.state = 'playing';
   r.seed = Math.floor(Math.random() * 1e9);
-  r.tickets = [TICKETS, TICKETS];
+  r.tickets = [MACHINES, MACHINES];
   r.vehicles = makeVehicles();
   for (const p of r.players.values()) { p.kills = 0; p.deaths = 0; p.dmg = 0; p.vid = null; }
   r.endsAt = Date.now() + 3000 + MATCH_TIME * 1000;
@@ -88,12 +89,6 @@ function startMatch(r) {
 function tick(r) {
   if (r.state !== 'playing') return;
   const now = Date.now();
-  for (const v of r.vehicles) {
-    if (v.alive || now < v.respawnAt) continue;
-    v.alive = true; v.hp = v.max; v.st = null; v.driver = null; v.lastHitBy = null;
-    io.to(r.code).emit('vspawn', { vid: v.vid });
-    broadcastRoom(r);
-  }
   if (now >= r.endsAt) endMatch(r);
 }
 function endMatch(r) {
@@ -107,8 +102,7 @@ function endMatch(r) {
 function destroyVehicle(r, v, by, how) {
   if (!v.alive) return;
   v.alive = false; v.hp = 0;
-  v.respawnAt = Date.now() + RESPAWN * 1000;
-  r.tickets[v.team] = Math.max(0, r.tickets[v.team] - 1);
+  countMachines(r);
   const driver = v.driver && r.players.get(v.driver);
   if (driver) { driver.deaths++; driver.vid = null; }
   // credit: the shooter, or whoever hit it last in the past 15 s
@@ -145,7 +139,7 @@ io.on('connection', socket => {
   socket.on('create', (d, cb) => {
     if (room) return cb && cb({ ok: false, err: 'Вы уже в комнате' });
     const code = newCode();
-    const r = { code, hostId: socket.id, players: new Map(), state: 'lobby', seed: Math.floor(Math.random() * 1e9), tickets: [TICKETS, TICKETS], vehicles: makeVehicles(), endsAt: null };
+    const r = { code, hostId: socket.id, players: new Map(), state: 'lobby', seed: Math.floor(Math.random() * 1e9), tickets: [MACHINES, MACHINES], vehicles: makeVehicles(), endsAt: null };
     rooms.set(code, r);
     attach(r, d && d.name);
     cb && cb({ ok: true, code, id: socket.id });
@@ -204,7 +198,7 @@ io.on('connection', socket => {
   socket.on('st', s => {
     const v = myVehicle();
     if (!v || !v.alive || !Array.isArray(s)) return;
-    v.st = s.slice(0, 12);
+    v.st = s.slice(0, 13);
     socket.to(room.code).volatile.emit('st', v.vid, v.st);
   });
   // shooter reports a hit; server owns hp
@@ -214,9 +208,9 @@ io.on('connection', socket => {
     if (!p || !v || v.team === p.team || Date.now() < room.startAt) return;
     const now = Date.now();
     p.hits = (p.hits || []).filter(t => now - t < 1000);
-    if (p.hits.length >= 14) return;
+    if (p.hits.length >= 18) return;
     p.hits.push(now);
-    const dmg = Math.max(1, Math.min(45, Math.round(Number(h.dmg) || 0)));
+    const dmg = Math.max(1, Math.min(95, Math.round(Number(h.dmg) || 0)));
     const pt = Array.isArray(h.pt) ? h.pt.slice(0, 3).map(Number) : null;
     damage(room, v, dmg, p.id, pt, String(h.k || '').slice(0, 8));
   });
