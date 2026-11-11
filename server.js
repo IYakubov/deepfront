@@ -50,7 +50,7 @@ function makeVehicles() {
     for (const [type, x, z, yaw] of LAYOUT) {
       count[type] = (count[type] || 0) + 1;
       const sp = team === 0 ? { x, z, yaw } : { x: -x, z, yaw: -yaw };
-      vs.push({ vid: `${team}${type[0]}${count[type]}`, team, type, n: count[type], hp: HP[type], max: HP[type], alive: true, driver: null, spawn: sp, st: null, respawnAt: 0, lastHitBy: null, lastHitAt: 0 });
+      vs.push({ vid: `${team}${type[0]}${count[type]}`, team, type, n: count[type], hp: HP[type], max: HP[type], alive: true, driver: null, ammo: type === 'icbm' ? 2 : 0, spent: false, spawn: sp, st: null, respawnAt: 0, lastHitBy: null, lastHitAt: 0 });
     }
   }
   return vs;
@@ -60,10 +60,10 @@ function publicRoom(r) {
     code: r.code, hostId: r.hostId, state: r.state, mode: 'team', seed: r.seed, tickets: r.tickets,
     timeLeft: r.endsAt && r.state === 'playing' ? Math.max(0, r.endsAt - Date.now()) : null,
     players: [...r.players.values()].map(p => ({ id: p.id, name: p.name, team: p.team, vid: p.vid, kills: p.kills, deaths: p.deaths, dmg: p.dmg })),
-    vehicles: r.vehicles.map(v => ({ vid: v.vid, team: v.team, type: v.type, n: v.n, hp: v.hp, max: v.max, alive: v.alive, driver: v.driver, spawn: v.spawn, st: v.st, }))
+    vehicles: r.vehicles.map(v => ({ vid: v.vid, team: v.team, type: v.type, n: v.n, hp: v.hp, max: v.max, alive: v.alive, ammo: v.ammo, spent: v.spent, driver: v.driver, spawn: v.spawn, st: v.st, }))
   };
 }
-function countMachines(r) { r.tickets = [0, 1].map(t => r.vehicles.filter(v => v.team === t && v.alive && v.type !== 'gunner' && v.type !== 'drone').length); }
+function countMachines(r) { r.tickets = [0, 1].map(t => r.vehicles.filter(v => v.team === t && v.alive && !v.spent && v.type !== 'gunner' && v.type !== 'drone').length); }
 function broadcastRoom(r) { io.to(r.code).emit('room', publicRoom(r)); }
 function teamCount(r, t) { let n = 0; for (const p of r.players.values()) if (p.team === t) n++; return n; }
 function rebalance(r) {
@@ -228,16 +228,24 @@ io.on('connection', socket => {
     if (!v || !room) return;
     destroyVehicle(room, v, null, String(how || 'crash').slice(0, 10));
   });
-  // repairing inside own base
-  socket.on('repair', () => {
-    const v = myVehicle(), now = Date.now();
-    if (!v || !v.alive || v.hp >= v.max || now - (v.lastRep || 0) < 900) return;
-    v.lastRep = now;
-    v.hp = Math.min(v.max, v.hp + Math.ceil(v.max * 0.04));
-    io.to(room.code).emit('dmg', { vid: v.vid, by: null, dmg: 0, hp: v.hp, pt: null, kind: 'repair' });
-  });
   // visuals of shots for everyone else
-  socket.on('shot', s => { if (room && s) socket.to(room.code).emit('shot', socket.id, s); });
+  socket.on('shot', s => {
+    if (!room || !s) return;
+    if (s.k === 'icbm') {
+      // an SS-27 has 2 missiles; once both are gone (and the last one has landed) it no longer counts as a machine
+      const v = myVehicle(), r = room;
+      if (!v || v.type !== 'icbm' || v.ammo <= 0) return;
+      v.ammo--;
+      if (v.ammo <= 0) setTimeout(() => {
+        if (!r.vehicles.includes(v) || r.state !== 'playing') return;
+        v.spent = true; countMachines(r); broadcastRoom(r);
+        io.to(r.code).emit('spent', { vid: v.vid });
+        if (r.tickets[v.team] <= 0) setTimeout(() => endMatch(r), 1500);
+      }, 27000);
+      broadcastRoom(r);
+    }
+    socket.to(room.code).emit('shot', socket.id, s);
+  });
   socket.on('missile', m => { if (room && m) socket.to(room.code).emit('missile', socket.id, m); });
   socket.on('mboom', m => { if (room && m) socket.to(room.code).emit('mboom', socket.id, m); });
   socket.on('flare', () => { if (room) io.to(room.code).emit('flare', socket.id); });

@@ -34,7 +34,7 @@ CONTROLS
 
 OTHER
   ПВО: 3 sites per base fire homing missiles at enemy jets within 1.5 km (flares decoy them).
-  Vehicles repair slowly inside their own base (ships: in their port).
+  Damage is permanent: nothing repairs. An SS-27 that has fired both missiles no longer counts as a machine.
   Enemies show on the map/HUD only when one of your vehicles or ПВО sites spots them.
 
 FILES

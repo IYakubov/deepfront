@@ -1542,7 +1542,8 @@ function syncVehicles() {
   for (const d of room.vehicles) {
     let v = vehicles.get(d.vid);
     if (!v) { v = makeVehicle(d); continue; }
-    v.hp = d.hp; v.max = d.max; v.driver = d.driver;
+    v.hp = d.hp; v.max = d.max; v.driver = d.driver; v.spent = !!d.spent;
+    if (v.type === 'icbm' && d.ammo != null) v.icbms = Math.min(v.icbms, d.ammo);
     if (!d.alive && v.alive && !v.dead) { v.alive = false; v.vis.g.visible = false; }
     if (d.alive && !v.alive && !v.dead) { resetVehicle(v, d); if (d.st) applyState(v, d.st, true); }
   }
@@ -2485,8 +2486,6 @@ function updateMe(dt, now) {
   else driveShip(v, dt, frozen);
   if (v.type === 'plane') { v.aimYaw = v.h; v.aimPitch = v.p; }
   // repair at home
-  repairT -= dt;
-  if (repairT <= 0 && inOwnBase(v) && v.hp < v.max) { repairT = 1; socket.emit('repair'); }
   sendT -= dt;
   if (sendT <= 0) { sendT = 0.05; socket.emit('st', stateOf(v)); }
 }
@@ -2601,7 +2600,7 @@ function renderCmdList() {
   const team = myTeam();
   const rows = room.vehicles.filter(d => d.team === team).map(d => {
     const v = vehicles.get(d.vid);
-    const st = !d.alive ? 'уничтожен' : d.driver ? (d.driver === myId ? 'вы' : nameOf(d.driver)) : 'свободен';
+    const st = !d.alive ? 'уничтожен' : d.spent ? 'ракет нет · вне игры' : d.driver ? (d.driver === myId ? 'вы' : nameOf(d.driver)) : 'свободен';
     const off = !d.alive || (d.driver && d.driver !== myId);
     return `<div class="vr ${off ? 'off' : ''} ${d.driver === myId ? 'mine' : ''}" data-v="${d.vid}"><span class="ic">${TYPE_ICON[d.type]}</span><span class="nm">${TYPE_NAME[d.type]} ${d.n}<br><span class="st">${st}</span></span><span class="hb"><i style="width:${Math.round(d.hp / d.max * 100)}%"></i></span></div>`;
   }).join('');
@@ -3039,6 +3038,7 @@ socket.on('matchEnd', d => {
     showScreen('result');
   }, 1500);
 });
+socket.on('spent', d => { const v = vehicles.get(d.vid); if (v) feed(`<b style="color:${TEAM_CSS[v.team]}">${TYPE_ICON.icbm} SS-27</b><span class="x">без ракет · вне игры</span>`); });
 socket.on('lobby', () => { leaveGame(); showScreen('lobby'); renderLobby(); });
 socket.on('left', d => { if (inGame) feed(`<span style="color:var(--dim)">${esc(d.name)} вышел</span>`); });
 socket.on('chat', d => {
