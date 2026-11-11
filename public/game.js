@@ -255,9 +255,9 @@ const camera = new THREE.PerspectiveCamera(62, 1, 0.3, 7000);
 camera.position.set(-1200, 600, 500); camera.lookAt(-1200, 0, 60);
 scene.add(camera);
 
-const hemi = new THREE.HemisphereLight(0xdfe6e4, 0x4a4a3e, 1.25);
+const hemi = new THREE.HemisphereLight(0xdfe6e4, 0x4a4a3e, 0.95);
 scene.add(hemi);
-const sun = new THREE.DirectionalLight(0xfff0d8, 2.1);
+const sun = new THREE.DirectionalLight(0xfff0d8, 2.5);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
 let shadowSize = 0;
@@ -328,6 +328,68 @@ function visRefs(vis) {
   const walk = (o, d) => { if (!o || d > 3) return; if (o.isObject3D) { set.add(o); return; } if (Array.isArray(o)) { for (const e of o) walk(e, d + 1); return; } if (typeof o === 'object' && !o.isColor && !o.isMaterial && !o.isTexture) for (const k of Object.keys(o)) walk(o[k], d + 1); };
   for (const k of Object.keys(vis)) if (k !== 'g') walk(vis[k], 0);
   return set;
+}
+// ── sky reflections: a small sky scene baked into an environment map for metal, paint and glass ──
+{
+  const es = new THREE.Scene();
+  es.add(new THREE.Mesh(new THREE.SphereGeometry(100, 32, 16), new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    vertexShader: 'varying vec3 vp; void main(){ vp=position; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.); }',
+    fragmentShader: `varying vec3 vp; void main(){ vec3 d=normalize(vp); float h=d.y;
+      vec3 sky=mix(vec3(0.74,0.80,0.82), vec3(0.30,0.46,0.66), clamp(h*1.6,0.,1.));
+      vec3 gnd=mix(vec3(0.42,0.40,0.30), vec3(0.20,0.21,0.15), clamp(-h*2.5,0.,1.));
+      vec3 c=mix(gnd, sky, smoothstep(-0.03,0.03,h));
+      float s=max(dot(d, normalize(vec3(0.45,0.8,0.35))),0.); c+=vec3(1.0,0.92,0.75)*(pow(s,600.)*30.+pow(s,40.)*0.8);
+      gl_FragColor=vec4(c,1.); }`
+  })));
+  const pm = new THREE.PMREMGenerator(renderer);
+  scene.environment = pm.fromScene(es, 0.03).texture;
+  scene.environmentIntensity = 0.5;
+  pm.dispose();
+}
+// ── weathering textures shared by every vehicle ──
+const WEAR = (() => {
+  const mk = (size, draw, srgb) => { const cv = document.createElement('canvas'); cv.width = cv.height = size; draw(cv.getContext('2d'), size); const t = new THREE.CanvasTexture(cv); t.wrapS = t.wrapT = THREE.RepeatWrapping; if (srgb) t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; return t; };
+  const R = Math.random;
+  // paint: slightly uneven tone, dirt blotches, rain streaks, chipped paint, darker panel edges
+  const paint = mk(512, (g, S) => {
+    g.fillStyle = '#e6e6e6'; g.fillRect(0, 0, S, S);
+    for (let i = 0; i < 90; i++) { const x = R() * S, y = R() * S, r = 20 + R() * 70; const gr = g.createRadialGradient(x, y, 0, x, y, r); const d = R() < .5; gr.addColorStop(0, d ? 'rgba(70,62,50,.13)' : 'rgba(255,255,255,.09)'); gr.addColorStop(1, 'rgba(0,0,0,0)'); g.fillStyle = gr; g.fillRect(x - r, y - r, r * 2, r * 2); }
+    for (let i = 0; i < 130; i++) { const x = R() * S, y = R() * S * 0.6, l = 30 + R() * 140; const gr = g.createLinearGradient(0, y, 0, y + l); gr.addColorStop(0, 'rgba(50,44,36,.22)'); gr.addColorStop(1, 'rgba(50,44,36,0)'); g.fillStyle = gr; g.fillRect(x, y, 1 + R() * 3, l); }
+    for (let i = 0; i < 500; i++) { g.fillStyle = R() < .6 ? `rgba(40,36,32,${.25 + R() * .4})` : `rgba(150,110,80,${.2 + R() * .3})`; const r = .6 + R() * 2.4; g.beginPath(); g.ellipse(R() * S, R() * S, r, r * (.5 + R()), R() * 3, 0, 7); g.fill(); }
+    for (let i = 0; i < 9000; i++) { const v = 120 + R() * 135 | 0; g.fillStyle = `rgba(${v},${v},${v},.10)`; g.fillRect(R() * S, R() * S, 1.5, 1.5); }
+  }, true);
+  // surface: grey = roughness and height; scratches and pitting
+  const surf = mk(256, (g, S) => {
+    g.fillStyle = '#b4b4b4'; g.fillRect(0, 0, S, S);
+    for (let i = 0; i < 7000; i++) { const v = 120 + R() * 120 | 0; g.fillStyle = `rgb(${v},${v},${v})`; g.fillRect(R() * S, R() * S, 1 + R() * 2, 1 + R() * 2); }
+    g.lineWidth = 1; for (let i = 0; i < 70; i++) { g.strokeStyle = R() < .5 ? 'rgba(70,70,70,.7)' : 'rgba(235,235,235,.6)'; const x = R() * S, y = R() * S, a = R() * 6.3, l = 8 + R() * 50; g.beginPath(); g.moveTo(x, y); g.lineTo(x + Math.cos(a) * l, y + Math.sin(a) * l); g.stroke(); }
+  }, false);
+  paint.repeat.set(0.3, 0.3); surf.repeat.set(0.6, 0.6);
+  return { paint, surf };
+})();
+// turn a vehicle's flat low-poly look into smooth, weathered, reflective surfaces
+function realism(root) {
+  root.traverse(o => {
+    if (!o.isMesh) return;
+    for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+      if (!m.isMeshStandardMaterial || m.userData.real) continue;
+      m.userData.real = true;
+      m.flatShading = false;
+      if (m.transparent) { m.roughness = 0.06; m.metalness = 0.9; m.envMapIntensity = 2.2; m.needsUpdate = true; continue; }
+      const c = m.color, lum = c.r * 0.3 + c.g * 0.6 + c.b * 0.1;
+      const glassy = m.roughness <= 0.25, dark = lum < 0.035;
+      if (glassy) { m.roughness = 0.05; m.metalness = 0.95; m.envMapIntensity = 2.4; }
+      else {
+        if (!m.map) m.map = WEAR.paint;
+        m.roughnessMap = WEAR.surf; m.bumpMap = WEAR.surf; m.bumpScale = dark ? 0.6 : 1.1;
+        m.roughness = dark ? 0.85 : Math.min(0.95, Math.max(0.55, m.roughness));
+        m.metalness = Math.max(m.metalness, dark ? 0.25 : 0.4);
+        m.envMapIntensity = 1.5;
+      }
+      m.needsUpdate = true;
+    }
+  });
 }
 function wrap(a) { while (a > Math.PI) a -= TAU; while (a < -Math.PI) a += TAU; return a; }
 
@@ -1373,6 +1435,7 @@ function makeVehicle(d) {
   const vis = buildVis(d.type, d.team, d.n);
   addDetail(d.type, vis, TEAM_COL[d.team]);
   if (d.type !== 'tank') compact(vis.g, visRefs(vis));
+  realism(vis.g);
   scene.add(vis.g);
   const v = {
     vid: d.vid, team: d.team, type: d.type, n: d.n, vis, alive: d.alive, hp: d.hp, max: d.max, driver: d.driver,
