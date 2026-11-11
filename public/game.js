@@ -148,7 +148,7 @@ const audio = (() => {
     master.connect(comp); comp.connect(ctx.destination);
     noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
     const nd = noiseBuf.getChannelData(0); for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
-    ['shoot', 'hit', 'ricochet', 'energy', 'victory', 'missile_alert'].forEach(load);
+    ['shoot', 'hit', 'ricochet', 'energy', 'victory', 'missile_alert', 'explosion', 'tank_shot_1', 'tank_shot_2', 'tank_shot_3'].forEach(load);
     // electric motor + propeller hum
     engOsc = ctx.createOscillator(); engOsc.type = 'sawtooth'; engOsc.frequency.value = 50;
     engOsc2 = ctx.createOscillator(); engOsc2.type = 'triangle'; engOsc2.frequency.value = 25;
@@ -1371,6 +1371,7 @@ function buildVis(type, team, n) {
 }
 function makeVehicle(d) {
   const vis = buildVis(d.type, d.team, d.n);
+  addDetail(d.type, vis, TEAM_COL[d.team]);
   if (d.type !== 'tank') compact(vis.g, visRefs(vis));
   scene.add(vis.g);
   const v = {
@@ -1491,7 +1492,7 @@ function destroyVis(v) {
   if (v.type === 'plane') v.vis.flame.visible = v.vis.core.visible = false;
   const big = v.type === 'ship' ? 3 : v.type === 'tank' ? 1.6 : 1.2;
   particles.explosion(v.pos.clone().setY(v.pos.y + 2), big);
-  audio.boom(v.pos, 1.3);
+  audio.boom(v.pos, 0.8); audio.at('explosion', v.pos, v.type === 'drone' || v.type === 'gunner' ? 0.9 : 1.6, v.type === 'ship' ? 0.8 : 1, 2600);
   if (v.type === 'tank' && v.vis.turret) v.vis.turret.rotation.z = 0.25;
   if (v.type === 'drone') v.vis.g.visible = false;
 }
@@ -1510,6 +1511,153 @@ function updateDead(v, dt) {
   v.smokeT -= dt;
   if (v.smokeT <= 0 && d.t < 20) { v.smokeT = 0.15; particles.smoke(_v1.copy(v.pos).setY(v.pos.y + 2.5), true); if (d.t < 6) particles.fire(_v1.copy(v.pos).setY(v.pos.y + 1.5)); }
   if (d.t > 22 && (v.type === 'ship' || H(v.pos.x, v.pos.z) < 0)) v.vis.g.visible = false;   // wrecks on land stay
+}
+
+// ═══════════ EXTRA VEHICLE DETAIL ═══════════
+const DM = {
+  dark: new THREE.MeshStandardMaterial({ color: 0x232526, roughness: .6, metalness: .4, flatShading: true }),
+  steel: new THREE.MeshStandardMaterial({ color: 0x8a8f92, roughness: .5, metalness: .6, flatShading: true }),
+  white: new THREE.MeshStandardMaterial({ color: 0xe0ded6, roughness: .7, flatShading: true }),
+  red: new THREE.MeshStandardMaterial({ color: 0xb02a20, roughness: .6, emissive: 0x300400, flatShading: true }),
+  amber: new THREE.MeshStandardMaterial({ color: 0xe8a020, roughness: .5, emissive: 0x402000, flatShading: true }),
+  yellow: new THREE.MeshStandardMaterial({ color: 0xd9b02a, roughness: .8, flatShading: true }),
+  olive: new THREE.MeshStandardMaterial({ color: 0x4a5232, roughness: .9, flatShading: true }),
+  wood: new THREE.MeshStandardMaterial({ color: 0x6b5438, roughness: 1, flatShading: true }),
+  canvas: new THREE.MeshStandardMaterial({ color: 0x77704f, roughness: 1, flatShading: true }),
+  lamp: new THREE.MeshBasicMaterial({ color: 0xfff3c4 }),
+  glass: new THREE.MeshStandardMaterial({ color: 0x9fc0d0, roughness: .1, metalness: .3, transparent: true, opacity: .35 }),
+};
+function addDetail(type, v, col) {
+  const P = (parent, geo, mat, x, y, z, rx = 0, ry = 0, rz = 0) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.rotation.set(rx, ry, rz); m.castShadow = true; parent.add(m); return m; };
+  const B = (w, h, d) => new THREE.BoxGeometry(w, h, d), C = (r, l, n = 8, r2 = r) => new THREE.CylinderGeometry(r2, r, l, n);
+  const HP2 = Math.PI / 2, g = v.g;
+  if (type === 'tank') {
+    const ex = new THREE.Group(); g.add(ex);
+    for (const sx of [-1, 1]) {
+      P(ex, C(0.36, 1.25, 10), DM.olive, sx * 0.75, 1.72, -3.62, 0, 0, HP2);                 // external fuel drums
+      for (const o of [-0.4, 0.4]) P(ex, C(0.375, 0.06, 10), DM.dark, sx * 0.75 + o, 1.72, -3.62, 0, 0, HP2);
+      P(ex, B(0.34, 0.16, 0.06), DM.red, sx * 1.45, 1.25, -3.74);                              // tail lights
+      P(ex, B(0.55, 0.5, 0.05), DM.dark, sx * 1.5, 0.85, 3.72, 0.3);                           // mud flaps
+      P(ex, B(0.5, 0.55, 0.05), DM.dark, sx * 1.5, 0.8, -3.78, -0.2);
+      P(ex, C(0.1, 0.5, 6), DM.steel, sx * 1.0, 1.05, 3.85, HP2);                              // tow shackles
+      P(ex, B(0.09, 0.09, 1.5), DM.steel, sx * 1.72, 1.5, 1.2);                                // crowbar / tools on the fenders
+    }
+    P(ex, C(0.17, 3.1, 7), DM.wood, 0, 1.32, -3.98, 0, 0, HP2);                               // unditching log
+    for (const o of [-1.1, 1.1]) P(ex, B(0.08, 0.4, 0.42), DM.steel, o, 1.32, -3.98);
+    P(ex, new THREE.TorusGeometry(0.34, 0.045, 5, 12), DM.steel, 0.6, 1.5, 3.3, HP2 - 0.4);     // coiled tow cable
+    const tex = new THREE.Group(); v.turret.add(tex);
+    P(tex, C(0.26, 2.2, 8), DM.canvas, 0, 0.75, -2.35, 0, 0, HP2);                             // rolled tarp
+    for (const o of [-0.7, 0, 0.7]) P(tex, B(0.06, 0.56, 0.56), DM.dark, o, 0.75, -2.35);
+    compact(ex, new Set()); compact(tex, new Set());
+  } else if (type === 'jeep') {
+    for (let i = 0; i < 4; i++) P(g, B(1.2, 0.03, 0.08), DM.dark, 0, 1.56, 0.95 + i * 0.28);        // bonnet louvres
+    P(g, B(1.7, 0.66, 0.02), DM.glass, 0, 1.86, 0.63, -0.25);                                    // windscreen glass
+    P(g, B(1.6, 0.25, 0.3), DM.dark, 0, 1.45, 0.45);                                             // dashboard
+    P(g, C(0.3, 0.02, 14), DM.white, 0, 1.565, 1.55);                                            // bonnet marking
+    P(g, B(0.5, 0.2, 0.03), DM.white, 0, 0.78, 2.36); P(g, B(0.5, 0.2, 0.03), DM.white, 0.5, 0.95, -2.31);   // plates
+    P(g, new THREE.TorusGeometry(0.2, 0.04, 5, 10), DM.canvas, -0.55, 0.9, 2.38);                // rope coil
+    P(g, C(0.14, 1.8, 7), DM.canvas, 0, 2.32, -0.75, 0, 0, HP2);                                 // rolled canvas on the roll bar
+    P(g, B(0.4, 0.3, 0.3), DM.olive, -0.62, 1.38, -1.55); P(g, C(0.012, 0.9, 3), DM.dark, -0.62, 1.95, -1.55);   // radio
+    P(g, B(0.06, 0.06, 1.1), DM.wood, -1.0, 1.25, -0.3); P(g, B(0.05, 0.26, 0.2), DM.steel, -1.0, 1.25, -0.9);  // shovel
+    P(g, B(0.05, 0.05, 0.8), DM.wood, -1.0, 1.05, -0.2); P(g, B(0.05, 0.2, 0.12), DM.steel, -1.0, 1.05, 0.22);  // axe
+    for (const sx of [-1, 1]) {
+      P(g, B(0.5, 0.6, 0.12), DM.canvas, sx * 0.45, 1.85, -0.38, -0.12);                         // seat backs
+      P(g, B(0.16, 0.12, 0.05), DM.red, sx * 0.8, 1.05, -2.12); P(g, B(0.12, 0.1, 0.05), DM.amber, sx * 0.85, 1.05, 2.14);
+      P(g, new THREE.TorusGeometry(0.17, 0.02, 4, 10), DM.dark, sx * 0.6, 1.2, 2.22);            // headlight guards
+      P(g, B(0.04, 0.5, 0.04), DM.dark, sx * 0.7, 1.0, 2.3); P(g, B(0.04, 0.5, 0.04), DM.dark, sx * 0.25, 1.0, 2.3);   // bull bar
+      P(g, C(0.1, 0.6, 6), DM.dark, sx * 0.75, 0.55, -1.9, HP2);                                 // exhaust / drawbar
+    }
+    for (const w of v.wheels) { const hub = new THREE.Mesh(C(0.2, 0.36, 8), DM.olive); hub.rotation.z = HP2; w.add(hub); }
+    P(v.gun, B(0.05, 0.12, 0.5), DM.yellow, 0.14, -0.02, 0.35);                                   // ammo belt
+    P(v.gun, B(0.05, 0.2, 0.3), DM.dark, 0, -0.18, -0.25); P(v.gun, B(0.3, 0.05, 0.05), DM.dark, 0, -0.1, -0.42);   // grips
+  } else if (type === 'plane') {
+    for (const z of [-4.2, -2.1, 0, 2.1]) P(g, C(1.0 + (z + 5) * 0.008, 0.04, 8, 1.0 + (z + 5) * 0.008), DM.dark, 0, 0, z, HP2).scale.set(1.012, 1, 1.012);   // panel lines
+    P(g, C(1.0, 0.45, 8, 1.0), DM.white, 0, 0, -3.3, HP2).scale.set(1.02, 1, 1.02);                // identification band
+    P(g, B(0.07, 0.05, 4.0), DM.dark, 0, 1.68, 4.4);                                             // canopy frame
+    for (const z of [3.3, 5.5]) P(g, new THREE.TorusGeometry(0.72, 0.035, 4, 10, Math.PI), DM.dark, 0, 1.0, z);
+    for (let i = 0; i < 12; i++) { const a = i / 12 * TAU; P(g, B(0.42, 0.05, 1.1), DM.dark, Math.cos(a) * 0.86, Math.sin(a) * 0.86, -7.35, 0.12 * Math.sin(a), 0, a + HP2); }   // nozzle petals
+    P(g, B(0.05, 0.55, 0.7), DM.dark, 0, 1.35, 0.3); P(g, B(0.05, 0.4, 0.5), DM.dark, 0, -1.2, 2.2);   // blade antennas
+    P(g, C(0.05, 1.7, 5), DM.steel, 0.75, 0.55, 7.0, HP2);                                        // refuelling probe
+    P(g, B(0.5, 0.3, 0.5), DM.dark, 0, -1.02, 6.2);                                              // sensor pod
+    for (const sx of [-1, 1]) {
+      P(g, C(0.11, 1.0, 6), DM.dark, sx * 1.1, 0.35, 5.6, HP2);                                   // gun ports
+      P(g, B(0.05, 0.5, 1.5), DM.dark, sx * 1.92, -0.2, 1.4, 0, 0, sx * 0.12);                     // intake splitters
+      P(g, B(0.7, 0.03, 1.1), DM.white, sx * 7.0, -0.09, -4.0);                                   // wingtip stripes
+      P(g, B(3.4, 0.03, 0.1), DM.dark, sx * 4.4, -0.095, -3.0, 0, sx * 0.42);                      // slat line
+      P(g, B(0.03, 0.9, 0.5), DM.white, sx * (1.0 + 0.72), 3.2, -7.4, 0, 0, -sx * 0.28);           // fin flashes
+      const om = new THREE.Group(); om.position.set(sx * 6.0, -0.62, -3.5); g.add(om);            // outer pylon with a short-range missile
+      P(om, C(0.11, 2.3, 6), DM.white, 0, 0, 0, HP2); P(om, new THREE.ConeGeometry(0.11, 0.4, 6), DM.dark, 0, 0, 1.35, HP2);
+      P(om, B(0.55, 0.03, 0.35), DM.dark, 0, 0, -0.95); P(om, B(0.03, 0.55, 0.35), DM.dark, 0, 0, -0.95); P(om, B(0.1, 0.4, 0.9), DM.dark, 0, 0.3, 0);
+      const tk = new THREE.Group(); tk.position.set(sx * 1.2, -1.15, -1.6); g.add(tk);            // conformal fuel tanks
+      P(tk, new THREE.CapsuleGeometry(0.32, 2.6, 3, 8), v.mats[1], 0, 0, 0, HP2);
+    }
+    if (v.gear) for (const [x, z] of [[0, 5.2], [-1.9, -2.2], [1.9, -2.2]]) { P(v.gear, B(0.05, 0.9, 0.5), DM.steel, x, -1.0, z + 0.3, 0.35); P(v.gear, C(0.2, 0.26, 8), DM.steel, x, -1.56, z, 0, 0, HP2); }
+  } else if (type === 'ship') {
+    for (const sx of [-1, 1]) {
+      P(g, B(0.04, 0.22, 20), DM.white, sx * 3.93, -0.3, -5);                                     // waterline stripe
+      P(g, B(1.6, 0.15, 2.4), v.mats[1], sx * 3.3, 7.3, 6.4); P(g, B(0.05, 0.7, 2.4), DM.white, sx * 4.08, 7.7, 6.4);   // bridge wings
+      P(g, C(0.28, 0.4, 8), DM.dark, sx * 3.7, 7.75, 7.2, HP2); P(g, C(0.22, 0.05, 8), DM.lamp, sx * 3.7, 7.75, 7.42, HP2);   // searchlights
+      for (let z = 1.5; z <= 7.5; z += 1.5) P(g, C(0.15, 0.05, 8), DM.dark, sx * 2.62, 5.4, z, 0, 0, HP2);      // portholes on the bridge block
+      for (let z = -12; z <= -7; z += 1.6) P(g, C(0.15, 0.05, 8), DM.dark, sx * 2.32, 4.9, z, 0, 0, HP2);
+      for (const z of [18, 8, -2, -18]) { P(g, C(0.16, 0.5, 6), DM.dark, sx * 3.3 * (z > 15 ? 0.6 : 1), 3.5, z); P(g, C(0.22, 0.08, 6), DM.dark, sx * 3.3 * (z > 15 ? 0.6 : 1), 3.78, z); }   // bollards
+      P(g, new THREE.TorusGeometry(0.33, 0.09, 5, 10), DM.red, sx * 2.63, 4.6, 0.0, 0, HP2);        // life rings
+      P(g, new THREE.TorusGeometry(0.33, 0.09, 5, 10), DM.red, sx * 2.33, 4.4, -6.5, 0, HP2);
+      P(g, B(0.9, 0.7, 1.4), DM.olive, sx * 2.9, 3.6, -16.5);                                     // ready-ammo lockers
+      P(g, C(0.3, 0.9, 8), DM.steel, sx * 1.6, 3.7, 12.2);                                        // vents
+      P(g, C(0.4, 0.3, 8, 0.25), DM.steel, sx * 1.6, 4.25, 12.2);
+      P(g, B(0.06, 3.2, 0.5), DM.steel, sx * 2.62, 5.0, 8.2);                                      // ladders
+      for (let k = 0; k < 6; k++) P(g, B(0.08, 0.04, 0.5), DM.dark, sx * 2.66, 3.6 + k * 0.5, 8.2);
+      P(g, C(0.12, 1.5, 6), DM.steel, sx * 0.9, 9.8, -2.8, 0.1);                                   // funnel pipes
+      P(g, C(0.5, 0.35, 8), DM.dark, sx * 1.4, 3.45, 20.2);                                        // capstans
+    }
+    P(g, C(1.5, 0.35, 10, 1.45), DM.dark, 0, 9.3, -2.85, -0.12);                                   // funnel band
+    P(g, new THREE.SphereGeometry(0.75, 10, 8), DM.white, 0, 9.75, 4.6);                           // radar dome
+    P(g, C(0.16, 6, 6, 0.1), DM.dark, 0, 9.4, -11.5); P(g, B(3, 0.14, 0.14), DM.dark, 0, 11.4, -11.5);   // aft mast
+    P(g, C(0.05, 2.4, 4), DM.steel, 0, 4.4, 23.2);                                                // jack staff
+    for (let z = -20; z <= 20; z += 4) P(g, B(7.2 * (Math.abs(z) > 14 ? 0.55 : 1), 0.02, 0.06), DM.dark, 0, 3.27, z);   // deck seams
+    P(g, B(1.6, 0.25, 1.6), DM.dark, 0, 3.4, -19.5); P(g, B(1.4, 0.2, 2.2), DM.dark, 0, 3.4, 9.0);   // hatches
+    P(g, B(5.3, 0.12, 8.1), DM.dark, 0, 6.65, 4.5); P(g, B(4.7, 0.12, 7.1), DM.dark, 0, 5.85, -9.2);   // roof edges
+    for (const t of v.turrets) {
+      P(t.g, B(4.1, 0.34, 0.4), DM.dark, 0, 1.75, -0.7);                                          // rangefinder arms
+      P(t.g, C(0.35, 0.14, 8), DM.dark, 0.8, 2.16, -0.3); P(t.g, B(0.08, 1.0, 0.08), DM.steel, 1.72, 1.3, -1.0);   // hatch, ladder
+      P(t.g, B(2.3, 0.9, 0.5), DM.canvas, 0, 1.3, 2.75, 0.2);                                      // blast bags
+      for (const bx of [-0.65, 0.65]) P(t.gun, C(0.26, 0.5, 8), DM.dark, bx, 0, 5.9, HP2);          // muzzle rings
+    }
+  } else if (type === 'icbm') {
+    for (const sx of [-1, 1]) {
+      P(g, B(0.3, 0.2, 0.05), DM.dark, sx * 1.95, 3.5, 10.2); P(g, B(0.04, 0.5, 0.04), DM.dark, sx * 1.8, 3.3, 10.2);     // mirrors
+      P(g, B(0.06, 1.5, 0.5), DM.steel, sx * 1.66, 2.1, 8.1); for (let k = 0; k < 4; k++) P(g, B(0.1, 0.04, 0.5), DM.dark, sx * 1.7, 1.5 + k * 0.4, 8.1);   // cab ladders
+      P(g, C(0.14, 0.12, 8), DM.amber, sx * 1.05, 3.78, 9.0);                                      // roof beacons
+      P(g, B(0.6, 0.5, 0.03), DM.dark, sx * 1.05, 2.4, 10.33);                                     // grilles
+      P(g, B(0.3, 0.16, 0.05), DM.red, sx * 1.3, 1.6, -10.28); P(g, B(0.2, 0.12, 0.05), DM.amber, sx * 1.4, 1.75, 10.42);
+      P(g, C(0.42, 2.6, 10), DM.olive, sx * 1.15, 1.25, -0.7, HP2);                                 // fuel tanks between the axle groups
+      P(g, C(0.1, 2.2, 6), DM.dark, sx * 1.7, 3.3, -6.5, 0.15);                                    // exhaust stacks
+      P(g, B(0.25, 0.25, 1.2), DM.steel, sx * 1.9, 1.3, -1); P(g, B(0.25, 0.25, 1.2), DM.steel, sx * 1.9, 1.3, -9.4);   // outrigger beams
+      P(g, B(0.45, 0.08, 0.45), DM.steel, sx * 2.2, 0.95, -1); P(g, B(0.45, 0.08, 0.45), DM.steel, sx * 2.2, 0.95, -9.4);
+      P(g, B(0.52, 0.04, 0.9), DM.dark, sx * 1.45, 3.22, -3); P(g, B(0.04, 0.3, 0.04), DM.steel, sx * 1.72, 2.9, -1.2);   // locker lids, handles
+      for (let k = 0; k < 5; k++) P(g, B(0.06, 0.12, 0.3), k % 2 ? DM.dark : DM.yellow, sx * 1.66, 1.2, 10.25 - k * 0.0 + 0, 0, 0, 0).position.set(sx * (0.3 + k * 0.3), 1.3, 10.57);   // hazard stripes on the bumper
+    }
+    P(g, C(0.75, 0.5, 10), DM.dark, 0, 2.4, -10.0, HP2);                                           // spare wheel
+    P(g, B(0.7, 0.3, 0.04), DM.white, 0, 1.3, -10.3);
+    P(g, C(0.015, 2.4, 3), DM.dark, 1.5, 4.6, 8.2, -0.15);                                         // whip antenna
+    for (const z of [3, 9, 15]) P(v.canister, B(2.3, 0.25, 0.4), DM.dark, 0, -0.45, z);            // cradle saddles
+    P(v.canister, C(1.04, 1.0, 14), DM.yellow, 0, 0.55, 18.6, HP2); P(v.canister, C(1.045, 0.25, 14), DM.dark, 0, 0.55, 18.6, HP2);   // warning band
+    P(v.canister, B(0.3, 0.2, 12), DM.dark, 0.95, 0.9, 9);                                         // cable duct
+  } else if (type === 'drone') {
+    for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+      P(g, new THREE.TorusGeometry(0.26, 0.012, 4, 14), DM.dark, sx * 0.48, 0.13, sz * 0.48, HP2);    // prop guards
+      P(g, new THREE.SphereGeometry(0.025, 5, 4), sz > 0 ? DM.lamp : DM.red, sx * 0.48, 0.0, sz * 0.48);
+      P(g, B(0.02, 0.14, 0.02), DM.dark, sx * 0.14, -0.1, sz * 0.2);                                // skids
+    }
+    P(g, B(0.3, 0.02, 0.06), DM.yellow, 0, 0.18, -0.05); P(g, B(0.02, 0.02, 0.5), DM.dark, 0.09, -0.18, 0.1); P(g, B(0.02, 0.02, 0.5), DM.dark, -0.09, -0.18, 0.1);
+    P(g, new THREE.SphereGeometry(0.03, 5, 4), DM.dark, 0.1, 0.56, -0.28); P(g, B(0.03, 0.03, 0.12), DM.steel, 0, -0.13, 0.75);   // antenna tip, fuse
+  } else if (type === 'gunner') {
+    P(g, B(0.5, 0.3, 0.3), DM.olive, -0.9, 0.17, -0.5); P(g, B(0.5, 0.3, 0.3), DM.olive, -0.95, 0.47, -0.45); P(g, B(0.35, 0.28, 0.45), DM.wood, 0.95, 0.52, -0.7);
+    P(g, B(0.05, 0.05, 1.0), DM.wood, 1.1, 0.35, 0.5, 0.9); P(g, B(0.04, 0.22, 0.18), DM.steel, 1.1, 0.72, 0.82, 0.9);   // shovel leaning on the bags
+    P(g, C(0.09, 0.22, 7), DM.olive, -0.6, 0.12, 0.3); P(g, B(0.3, 0.22, 0.2), DM.dark, 0.6, 0.12, 0.2);               // canteen, radio
+    P(v.gun, B(0.04, 0.1, 0.45), DM.yellow, 0.12, -0.05, 0.3); P(v.gun, B(0.34, 0.26, 0.04), DM.steel, 0, 0.14, 0.52);     // belt, shield
+    P(v.gun, B(0.26, 0.04, 0.04), DM.dark, 0, 0, -0.45); P(v.gun, B(0.04, 0.1, 0.04), DM.dark, 0, 0.16, 1.55);            // spade grips, front sight
+  }
 }
 
 // ═══════════ PROJECTILES ═══════════
@@ -1624,13 +1772,14 @@ socket.on('shot', (pid, s) => {
   if (s.tv && s.tv === myVid) logMsg('<b style="color:#ff6a50">По вам пущена ракета!</b>');
   if (s.k === 'icbm') { centerMsg('РАКЕТНЫЙ УДАР!', 'цель отмечена на карте · ' + ICBM_T + ' с до удара', 4000, '#ff5a46'); audio.play('missile_alert', 0.9); setTimeout(() => audio.play('missile_alert', 0.9), 2300); audio.at('shoot', o, 2, 0.4, 3000); return; }
   if (s.k === 'mg' || s.k === 'cannon') { if (Math.random() < 0.5) audio.at('shoot', o, 0.25, s.k === 'mg' ? 1.9 : 2.4, 700); }
-  else { audio.at('shoot', o, s.k === 'navshell' ? 1.2 : 1, s.k.includes('rocket') ? 0.6 : 0.8); particles.muzzle(o, vel.clone().normalize()); }
+  else if (s.k === 'shell' || s.k === 'navshell') { audio.at(gunSound(), o, 1.1, s.k === 'navshell' ? 0.85 : 1, 1800); particles.muzzle(o, vel.clone().normalize()); }
+  else { audio.at('shoot', o, 1, s.k.includes('rocket') ? 0.6 : 0.8); particles.muzzle(o, vel.clone().normalize()); }
 });
 function icbmImpact(s) {
   const pt = s.target;
   particles.explosion(pt, 7);
   for (let k = 0; k < 10; k++) { const a = k / 10 * TAU; setTimeout(() => particles.explosion(new THREE.Vector3(pt.x + Math.cos(a) * 22, pt.y + 2, pt.z + Math.sin(a) * 22), 3), 80 + k * 60); }
-  audio.boom(pt, 2.5); setTimeout(() => audio.boom(pt, 2), 250);
+  audio.boom(pt, 2.5); audio.at('explosion', pt, 2.2, 0.8, 6000); setTimeout(() => audio.at('explosion', pt, 1.4, 0.6, 6000), 350);
   shake = Math.max(shake, Math.max(0.2, 1.4 - pt.distanceTo(camera.position) / 700));
   if (!s.mine) return;
   const myT = teamOfVid(s.ownerVid);
@@ -1811,6 +1960,7 @@ addEventListener('wheel', e => {
 }, { passive: true });
 
 // ═══════════ DRIVING ═══════════
+const gunSound = () => 'tank_shot_' + (1 + Math.floor(Math.random() * 3));
 const myVehicle = () => myVid ? vehicles.get(myVid) : null;
 const SHIP_TEL = [-0.4, 0, 0.33, 0.66, 1];
 const SHIP_TEL_TXT = ['НАЗАД', 'СТОП', '1/3', '2/3', 'ПОЛНЫЙ'];
@@ -1909,7 +2059,7 @@ function driveGround(v, dt, frozen) {
       const o = v.vis.tip.getWorldPosition(new THREE.Vector3());
       const dir = fwd(v.aimYaw, v.aimPitch, new THREE.Vector3());
       fireShot('shell', o, dir);
-      particles.muzzle(o, dir); audio.play('shoot', 1.3, 0, 0.75); shake = Math.max(shake, 0.45);
+      particles.muzzle(o, dir); audio.play(gunSound(), 1.0); shake = Math.max(shake, 0.45);
       v.speed -= 0.8;
     }
   } else {
@@ -2233,7 +2383,7 @@ function driveShip(v, dt, frozen) {
         fireShot('navshell', o, dir); particles.muzzle(o, dir); fired++;
       }
     }
-    if (fired) { reload = 5; audio.play('shoot', 1.5, 0, 0.6); shake = Math.max(shake, 0.35); }
+    if (fired) { reload = 5; audio.play(gunSound(), 1.1, 0, 0.85); setTimeout(() => audio.play(gunSound(), 0.8, 0, 0.9), 140); shake = Math.max(shake, 0.35); }
     else logMsg('Орудия не достают — поверните корабль');
   }
   if (mouseAlt && reload2 <= 0 && !chatOpen && !frozen) {
