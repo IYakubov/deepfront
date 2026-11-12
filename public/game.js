@@ -3,6 +3,9 @@
 // ═══════════════════════════════════════════════════════
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
+import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 
 const socket = io({ transports: ['websocket', 'polling'] });
 const $ = id => document.getElementById(id);
@@ -22,7 +25,7 @@ const TYPE_ICON = { tank: '▣', jeep: '◆', plane: '✈', ship: '⛴', gunner:
 const TEAM_COL = [0x6f7d40, 0x3f6283];
 const TEAM_CSS = ['#a9b86a', '#7fa6c9'];
 // collision / hit boxes in local space [hx, y0, y1, hz]
-const HITBOX = { tank: [1.75, 0, 2.7, 3.5], jeep: [1.15, 0.2, 2.3, 2.3], plane: [7, -1.2, 2.6, 8.6], ship: [4, -2.5, 12, 23], gunner: [1.7, 0, 2.2, 1.7], icbm: [1.9, 0, 4.2, 11], drone: [0.7, -0.35, 0.5, 0.7] };
+const HITBOX = { tank: [1.7, 0, 2.7, 3.7], jeep: [1.35, 0.2, 2.6, 2.3], plane: [6.6, -1.2, 2.6, 9.5], ship: [3.2, -2, 10, 24], gunner: [1.7, 0, 2.2, 1.7], icbm: [2.05, 0, 4.3, 11], drone: [0.7, -0.35, 0.5, 0.7] };
 // damage per weapon against each vehicle type
 const DMG = {
   shell: { tank: 30, jeep: 45, plane: 45, ship: 24, gunner: 40 },
@@ -662,7 +665,8 @@ function buildWorld(seed) {
   const pineMat = camFade(M(0x4b5e36, { roughness: 1 }), 3, 10), trunkMat = M(0x5a4a3a);
   const tr = new THREE.InstancedMesh(trunkGeo, trunkMat, trees.length), cr = new THREE.InstancedMesh(crownGeo, pineMat, trees.length);
   trees.forEach((t, i) => { dummy.position.set(t.x, t.y - .3, t.z); dummy.rotation.set(0, t.r, 0); dummy.scale.setScalar(t.s); dummy.updateMatrix(); tr.setMatrixAt(i, dummy.matrix); cr.setMatrixAt(i, dummy.matrix); });
-  cr.castShadow = true; group.add(tr, cr);
+  cr.castShadow = true;
+  const treeProc = new THREE.Group(); treeProc.add(tr, cr); group.add(treeProc);
 
   // ── dirt road between the bases, telegraph poles ──
   { const pts = [], idx = []; let n = 0;
@@ -717,6 +721,7 @@ function buildWorld(seed) {
   compact(group, new Set([...world_radars, ...samSites.map(q => q.rad), ...samSites.map(q => q.turn)]));
   scene.add(group);
   world = { group, boxes, trees, samSites, seed };
+  world.treeState = plantTrees(group, trees, treeProc);
   for (let i = 0; i < GR_N * 2; i++) grC[i] = 1e9;
   buildMinimapBase();
 }
@@ -1213,7 +1218,7 @@ function buildGunner(color) {
   add(new THREE.CylinderGeometry(0.06, 0.06, 0.5, 6), dark, 0, 0.02, 0.75, gun).rotation.x = Math.PI / 2;
   add(new THREE.BoxGeometry(0.3, 0.26, 0.3), new THREE.MeshStandardMaterial({ color: 0x4f5a34, flatShading: true }), 0.24, -0.05, 0.05, gun);
   const tip = new THREE.Object3D(); tip.position.set(0, 0.02, 1.8); gun.add(tip);
-  return { g, turret, gun, tip, mats: [teamM], color: new THREE.Color(color) };
+  return { g, turret, gun, tip, man, mats: [teamM], color: new THREE.Color(color) };
 }
 
 // SS-27 «Тополь-М» mobile launcher: 16-wheel truck with a missile canister that erects
@@ -1360,6 +1365,460 @@ const particles = (() => {
 })();
 
 
+// ═══════════ 3D MODELS (Sketchfab glTF, optimised offline) ═══════════
+// Every machine is still built procedurally first (that keeps all the gameplay hooks: muzzles, turrets,
+// hitboxes); once the models are loaded the procedural body is hidden and the real model is fitted in.
+const MODELS = {};
+let modelsDone = false;
+const modelWaiters = [];
+function whenModels(fn) { if (modelsDone) fn(); else modelWaiters.push(fn); }
+{
+  const L = new GLTFLoader(); L.setMeshoptDecoder(MeshoptDecoder);
+  const names = ['tank', 'jet', 'ship', 'jeep', 'topol', 'drone', 'soldier', 'tree1', 'tree2', 'tank_lo', 'jet_lo', 'ship_lo', 'jeep_lo', 'topol_lo', 'drone_lo'];
+  let left = names.length;
+  const done = () => {
+    if (--left > 0) return;
+    try { prepModels(); } catch (e) { console.error(e); }
+    modelsDone = true;
+    for (const f of modelWaiters.splice(0)) { try { f(); } catch (e) { console.error(e); } }
+  };
+  for (const n of names) L.load('models/' + n + '.glb', gl => { gl.scene.updateMatrixWorld(true); MODELS[n] = gl.scene; done(); }, undefined, e => { console.warn('model failed', n, e); done(); });
+}
+const _mb = new THREE.Box3(), _mb2 = new THREE.Box3(), _mv = new THREE.Vector3(), _mv2 = new THREE.Vector3(), _mv3 = new THREE.Vector3();
+
+// clone a model into a holder group: centred on x/z, scaled to a length (z) / height (y) / factor,
+// standing on y = 0 (or centred, or keeping its own y = 0 as the waterline)
+function fitModel(name, o = {}) {
+  const src = MODELS[name]; if (!src) return null;
+  const m = o.skinned ? SkeletonUtils.clone(src) : src.clone(true);
+  if (o.rotY) m.rotation.y = o.rotY;
+  const holder = new THREE.Group(); holder.add(m); holder.updateMatrixWorld(true);
+  _mb.setFromObject(m);
+  const size = _mb.getSize(_mv), c = _mb.getCenter(_mv2);
+  const s = o.len ? o.len / size.z : o.height ? o.height / size.y : (o.scale || 1);
+  m.scale.multiplyScalar(s);
+  m.position.set(-c.x * s, o.keepY ? 0 : o.centerY ? -c.y * s : -_mb.min.y * s, -c.z * s);
+  m.position.y += o.y || 0; m.position.z += o.z || 0;
+  holder.updateMatrixWorld(true);
+  return holder;
+}
+// the low-detail version of a model, placed exactly like the fitted full one
+function fitLike(holder, name, ref) {
+  const src = MODELS[name]; if (!src) return null;
+  ref = ref || holder.children[0];
+  const m = src.clone(true); m.position.copy(ref.position); m.rotation.copy(ref.rotation); m.scale.copy(ref.scale);
+  const h = new THREE.Group(); h.add(m); h.position.copy(holder.position); h.scale.copy(holder.scale); h.visible = false;
+  return h;
+}
+// switch between full and low detail by distance (and zoom); my own machine is always full detail
+function lodCheck(v) {
+  const vis = v.vis;
+  const d = camera.position.distanceTo(v.pos) * camera.getEffectiveFOV() / 62;
+  const lo = v.vid !== myVid && (vis.lo ? d > 140 : d > 170);
+  if (lo === !!vis.lo) return;
+  vis.lo = lo;
+  for (const o of vis.hiParts) o.visible = !lo;
+  for (const o of vis.loParts) o.visible = lo;
+}
+function addLod(v, g, hiParts, lo, col, k) {
+  if (!lo) return;
+  g.add(lo); v.mats = v.mats.concat(ownMats(lo, col, k));
+  v.hiParts = hiParts; v.loParts = [lo]; v.lo = false;
+}
+// own copies of the materials (team tint, wreck darkening), lightly tinted towards the team colour
+function ownMats(root, color, k = 0.35) {
+  const c = new THREE.Color(color); c.multiplyScalar(1 / Math.max(c.r, c.g, c.b, 0.001));
+  const tint = new THREE.Color(1, 1, 1).lerp(c, k);
+  const copies = new Map(), mats = [];
+  root.traverse(o => {
+    if (!o.isMesh) return;
+    o.castShadow = true; o.receiveShadow = true;
+    if (o.isSkinnedMesh) o.frustumCulled = false;
+    let m = copies.get(o.material);
+    if (!m) {
+      m = o.material.clone(); m.userData.real = true;
+      m.userData.base = m.color.clone().multiply(tint); m.color.copy(m.userData.base);
+      m.envMapIntensity = 1.1;
+      copies.set(o.material, m); mats.push(m);
+    }
+    o.material = m;
+  });
+  return mats;
+}
+// hide the procedural body, except the given objects (and everything under them)
+function hideProc(g, keep = []) {
+  const keepSet = new Set(); for (const k of keep) if (k) k.traverse(o => keepSet.add(o));
+  g.traverse(o => { if (o.isMesh && !keepSet.has(o)) o.visible = false; });
+}
+// a pivot group at a world point, adopting the given objects without moving them
+function pivotAt(parent, at, ...nodes) {
+  const p = new THREE.Group(); parent.add(p); parent.updateMatrixWorld(true);
+  p.position.copy(parent.worldToLocal(at.clone())); p.updateMatrixWorld(true);
+  for (const n of nodes) if (n) p.attach(n);
+  return p;
+}
+const meshesNamed = (root, re) => { const out = []; root.traverse(o => { if (o.isMesh && re.test(o.name)) out.push(o); }); return out; };
+const boxOf = list => { _mb2.makeEmpty(); for (const o of list) _mb2.expandByObject(o); return _mb2.clone(); };
+// split a mesh's triangles into groups (by a key from the triangle's world-space centroid); new meshes sit beside the old one
+function splitMesh(mesh, keyOf) {
+  const geo = mesh.geometry, pos = geo.attributes.position, idx = geo.index;
+  mesh.updateMatrixWorld(true);
+  const buckets = new Map(), a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+  const n = idx ? idx.count : pos.count, gi = i => idx ? idx.getX(i) : i;
+  for (let i = 0; i < n; i += 3) {
+    a.fromBufferAttribute(pos, gi(i)); b.fromBufferAttribute(pos, gi(i + 1)); c.fromBufferAttribute(pos, gi(i + 2));
+    a.add(b).add(c).multiplyScalar(1 / 3).applyMatrix4(mesh.matrixWorld);
+    const k = keyOf(a); if (!buckets.has(k)) buckets.set(k, []);
+    buckets.get(k).push(gi(i), gi(i + 1), gi(i + 2));
+  }
+  const out = {};
+  for (const [k, list] of buckets) {
+    const g2 = new THREE.BufferGeometry();
+    for (const nm in geo.attributes) g2.setAttribute(nm, geo.attributes[nm]);
+    g2.setIndex(list);
+    const m = new THREE.Mesh(g2, mesh.material);
+    m.position.copy(mesh.position); m.quaternion.copy(mesh.quaternion); m.scale.copy(mesh.scale); m.name = mesh.name + '_' + k;
+    m.castShadow = mesh.castShadow; m.receiveShadow = mesh.receiveShadow;
+    mesh.parent.add(m); m.updateMatrixWorld(true);
+    out[k] = m;
+  }
+  mesh.parent.remove(mesh);
+  return out;
+}
+// do the fitting with the vehicle at the origin (world space == vehicle space), then put it back
+function atOrigin(g, fn) {
+  const par = g.parent, p = g.position.clone(), r = g.rotation.clone();
+  if (par) par.remove(g);
+  g.position.set(0, 0, 0); g.rotation.set(0, 0, 0); g.updateMatrixWorld(true);
+  try { fn(); } finally { g.position.copy(p); g.rotation.copy(r); if (par) par.add(g); g.updateMatrixWorld(true); }
+}
+
+// merge the parts that don't move into one mesh per material (far fewer draw calls)
+const _m4 = new THREE.Matrix4();
+function mergeStatic(root) {
+  root.updateMatrixWorld(true);
+  const inv = new THREE.Matrix4().copy(root.matrixWorld).invert(), by = new Map();
+  root.traverse(o => { if (o.isMesh && !o.isSkinnedMesh && o.visible) { if (!by.has(o.material)) by.set(o.material, []); by.get(o.material).push(o); } });
+  for (const [mat, list] of by) {
+    if (list.length < 2) continue;
+    const geos = list.map(m => {
+      const g = floatGeo(m.geometry);
+      if (!g.index) g.setIndex(Array.from({ length: g.attributes.position.count }, (_, i) => i));
+      g.applyMatrix4(_m4.multiplyMatrices(inv, m.matrixWorld));
+      if (!g.attributes.normal) g.computeVertexNormals();
+      if (!g.attributes.uv) g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2));
+      return g;
+    });
+    const mg = mergeGeometries(geos); if (!mg) continue;
+    const mesh = new THREE.Mesh(mg, mat); mesh.castShadow = mesh.receiveShadow = true; root.add(mesh);
+    for (const m of list) m.parent.remove(m);
+  }
+}
+function prepModels() {
+  // gunner: Mixamo T-pose → arms forward onto the machine gun's grips
+  const sol = MODELS.soldier;
+  if (sol) {
+    sol.updateMatrixWorld(true);
+    const bone = re => { let b = null; sol.traverse(o => { if (!b && o.isBone && re.test(o.name)) b = o; }); return b; };
+    const aim = (b, child, dir) => {
+      if (!b || !child) return;
+      const bp = b.getWorldPosition(new THREE.Vector3()), cur = child.getWorldPosition(new THREE.Vector3()).sub(bp).normalize();
+      const rot = new THREE.Quaternion().setFromUnitVectors(cur, dir.clone().normalize());
+      const bw = b.getWorldQuaternion(new THREE.Quaternion()), pw = b.parent.getWorldQuaternion(new THREE.Quaternion());
+      b.quaternion.copy(pw.invert().multiply(rot.multiply(bw))); b.updateMatrixWorld(true);
+    };
+    for (const [side, sx] of [['Left', 1], ['Right', -1]]) {
+      const arm = bone(new RegExp(side + 'Arm(_\\d+)?$')), fore = bone(new RegExp(side + 'ForeArm(_\\d+)?$')), hand = bone(new RegExp(side + 'Hand(_\\d+)?$'));
+      aim(arm, fore, new THREE.Vector3(sx * 0.3, -0.75, 0.6));
+      aim(fore, hand, new THREE.Vector3(-sx * 0.3, 0.12, 1));
+    }
+    const head = bone(/Head(_\d+)?$/); if (head) { head.rotation.x += 0.15; head.updateMatrixWorld(true); }
+  }
+  prepTrees();
+}
+
+// ── per-type fitting ──
+function dressVis(type, vis, color) {
+  if (!modelsDone || vis.model) return;
+  const name = { tank: 'tank', plane: 'jet', ship: 'ship', jeep: 'jeep', icbm: 'topol', drone: 'drone', gunner: 'soldier' }[type];
+  if (!MODELS[name]) return;
+  atOrigin(vis.g, () => DRESS[type](vis, color));
+  vis.model = true;
+}
+const DRESS = {
+  tank(v, col) {
+    const g = v.g; hideProc(g);
+    const S = 0.85, model = MODELS.tank.clone(true);
+    model.scale.setScalar(S); model.position.set(0, 0.27 * S, 0.35);
+    g.add(model); v.mats = ownMats(model, col, 0.42);
+    g.updateMatrixWorld(true);
+    const nodes = re => { const out = []; model.traverse(o => { if (re.test(o.name) && !o.isMesh) out.push(o); }); return out; };
+    const wpos = n => n.getWorldPosition(new THREE.Vector3());
+    const turretNode = nodes(/^Turret_low/)[0], mantle = nodes(/^Mantle/)[0], cannon = nodes(/^Cannon_low/)[0];
+    const turret = pivotAt(g, wpos(turretNode), turretNode, ...nodes(/^Hatch/));
+    const gun = pivotAt(turret, wpos(mantle), mantle);
+    _mb.setFromObject(cannon);
+    const tip = new THREE.Object3D(); gun.add(tip);
+    tip.position.copy(gun.worldToLocal(new THREE.Vector3((_mb.min.x + _mb.max.x) / 2, (_mb.min.y + _mb.max.y) / 2, _mb.max.z)));
+    const wheels = [];
+    for (const w of nodes(/^(Roadwheel|Sprocket|Upper_?Wheel)/)) {
+      _mb.setFromObject(w);
+      const p = pivotAt(g, _mb.getCenter(new THREE.Vector3()), w);
+      p.userData.r = Math.max(0.15, (_mb.max.y - _mb.min.y) / 2); wheels.push(p);
+    }
+    Object.assign(v, { turret, gun, tip, barrel: cannon, wheels, tracks: [] });
+    mergeStatic(model);
+    if (MODELS.tank_lo) { const lo = MODELS.tank_lo.clone(true); lo.scale.setScalar(S); lo.position.copy(model.position); lo.visible = false; addLod(v, g, [model, turret, ...wheels], lo, col, 0.42); }
+  },
+  plane(v, col) {
+    const g = v.g;
+    hideProc(g, [v.flame, v.core]);
+    const holder = fitModel('jet', { len: 19, rotY: Math.PI, y: -1.9 }), lo = fitLike(holder, 'jet_lo');
+    g.add(holder); g.updateMatrixWorld(true); v.mats = ownMats(holder, col, 0.3);
+    // canopy: the model has it open; hinge it shut at its rear edge
+    const can = meshesNamed(holder, /^K_canopy/);
+    if (can.length) {
+      const b = boxOf(can);
+      const hinge = pivotAt(g, new THREE.Vector3((b.min.x + b.max.x) / 2, b.min.y + (b.max.y - b.min.y) * 0.25, b.min.z), ...can);
+      // the canopy frame rods are part of the body mesh: take the body triangles up inside the open canopy along
+      const ylim = b.min.y + (b.max.y - b.min.y) * 0.45, body0 = []; holder.traverse(o => { if (o.isMesh && !/^K_/.test(o.name)) body0.push(o); });
+      for (const m of body0) { const parts = splitMesh(m, p => p.y > ylim && b.containsPoint(p) ? 'frame' : 'body'); if (parts.frame) hinge.attach(parts.frame); }
+      v.canopy = hinge;
+    }
+    // landing gear: the triangles of the body that hang below the belly; retracted in the air
+    const body = []; holder.traverse(o => { if (o.isMesh && !/^K_/.test(o.name)) body.push(o); });
+    const gearParts = [];
+    for (const m of body) { const parts = splitMesh(m, p => p.y < -0.65 ? 'gear' : 'body'); if (parts.gear) gearParts.push(parts.gear); }
+    const gear = new THREE.Group(); g.add(gear); for (const p of gearParts) gear.attach(p);
+    v.gear = gear;
+    // twin afterburners at the two nozzles
+    const nz = -9.15, ny = -0.62;
+    // (the second flame is a child of the first, so stretching the first along its axis stretches both)
+    for (const [key, len, r, z] of [['flame', 4, 0.55, nz - 2], ['core', 2.4, 0.32, nz - 1.2]]) {
+      const m = v[key]; m.geometry = new THREE.ConeGeometry(r, len, 10, 1, true); m.position.set(-0.86, ny, z); m.visible = true;
+      const twin = new THREE.Mesh(m.geometry, m.material); twin.position.set(1.72, 0, 0); m.add(twin);
+    }
+    // weapons on the model are always shown; the procedural ones stay hidden
+    v.bombs.forEach(b => b.traverse(o => { if (o.isMesh) o.visible = false; }));
+    v.missiles.forEach(b => b.traverse(o => { if (o.isMesh) o.visible = false; }));
+    for (const [i, gun] of v.guns.entries()) gun.position.set(i ? -0.9 : 0.9, -0.1, 6.2);
+    mergeStatic(holder); mergeStatic(gear);
+    addLod(v, g, [holder, v.canopy].filter(Boolean), lo, col, 0.3);
+  },
+  ship(v, col) {
+    const g = v.g; hideProc(g);
+    const holder = fitModel('ship', { len: 48, keepY: true }), lo = fitLike(holder, 'ship_lo');
+    g.add(holder); g.updateMatrixWorld(true); v.mats = ownMats(holder, col, 0.22);
+    const order = [/^K_HP_JGM_1__/, /^K_HP_JGM_2__/, /^K_HP_JGM_5__/];
+    order.forEach((re, i) => {
+      const parts = meshesNamed(holder, re); if (!parts.length) return;
+      const b = boxOf(parts), mean = new THREE.Vector3(); let cnt = 0;
+      for (const m of parts) { const pa = m.geometry.attributes.position; for (let k = 0; k < pa.count; k++) { mean.add(_mv.fromBufferAttribute(pa, k).applyMatrix4(m.matrixWorld)); cnt++; } }
+      mean.multiplyScalar(1 / cnt);
+      const cz = (b.min.z + b.max.z) / 2, dir = cz >= mean.z ? 1 : -1;       // barrels stick out on the far side of the gun house
+      const endZ = dir > 0 ? b.max.z : b.min.z;
+      const T = TURRETS[i], t = v.turrets[i];
+      T.z = mean.z; T.y = b.min.y; T.rest = dir > 0 ? 0 : Math.PI;
+      t.g.position.set(mean.x, b.min.y, mean.z); t.g.rotation.set(0, T.rest, 0); g.updateMatrixWorld(true);
+      for (const m of parts) t.g.attach(m);
+      const by = b.min.y + (b.max.y - b.min.y) * 0.45;
+      t.gun.position.copy(t.g.worldToLocal(new THREE.Vector3(mean.x, by, mean.z))); t.gun.updateMatrixWorld(true);
+      t.tips.forEach((tp, j) => tp.position.copy(t.gun.worldToLocal(new THREE.Vector3(mean.x + (j ? 0.35 : -0.35), by, endZ))));
+    });
+    v.funnelTop.position.set(0, 9.5, -2);
+    mergeStatic(holder);
+    addLod(v, g, [holder, ...v.turrets.map(t => t.g)], lo, col, 0.22);
+  },
+  jeep(v, col) {
+    const g = v.g; hideProc(g);
+    const holder = fitModel('jeep', { len: 4.6 }), lo = fitLike(holder, 'jeep_lo');
+    g.add(holder); g.updateMatrixWorld(true); v.mats = ownMats(holder, col, 0.5);
+    // roof machine gun and its shield turn together
+    const mg = meshesNamed(holder, /^K_Machine_Gun/);
+    if (mg.length) {
+      const mount = meshesNamed(holder, /^K_Machine_Gun_004/), shield = meshesNamed(holder, /^K_Machine_Gun_001/), barrel = meshesNamed(holder, /^K_Machine_Gun__/);
+      const bm = boxOf(mount.length ? mount : mg), bs = boxOf(shield.length ? shield : mg);
+      const at = new THREE.Vector3(0, bm.min.y, ((bm.min.z + bm.max.z) / 2 + (bs.min.z + bs.max.z) / 2) / 2);
+      v.turret.position.copy(at); v.turret.rotation.set(0, 0, 0); v.gun.position.set(0, 0, 0); v.gun.rotation.set(0, 0, 0); g.updateMatrixWorld(true);
+      for (const m of mg) v.gun.attach(m);
+      const bb = boxOf(barrel.length ? barrel : mg);
+      v.tip.position.copy(v.gun.worldToLocal(new THREE.Vector3((bb.min.x + bb.max.x) / 2, bb.max.y - 0.06, bb.max.z)));
+    }
+    // tyres: one mesh per material holds all four; split them by corner and spin each corner
+    const tyres = meshesNamed(holder, /^K_Tire/), corners = {};
+    for (const m of tyres) for (const [k, part] of Object.entries(splitMesh(m, p => (p.x < 0 ? 'L' : 'R') + (p.z < 0 ? 'B' : 'F')))) (corners[k] = corners[k] || []).push(part);
+    v.wheels = Object.values(corners).map(list => pivotAt(g, boxOf(list).getCenter(new THREE.Vector3()), ...list));
+    mergeStatic(holder); for (const w of v.wheels) mergeStatic(w); mergeStatic(v.gun);
+    addLod(v, g, [holder, v.turret, ...v.wheels], lo, col, 0.5);
+  },
+  icbm(v, col) {
+    const g = v.g; hideProc(g);
+    const holder = fitModel('topol', { len: 22 }), lo = fitLike(holder, 'topol_lo');
+    g.add(holder); g.updateMatrixWorld(true); v.mats = ownMats(holder, col, 0.3);
+    const full = boxOf([holder]), cut = full.min.y + (full.max.y - full.min.y) * 0.5;
+    const meshes = []; holder.traverse(o => { if (o.isMesh) meshes.push(o); });
+    const top = [];
+    for (const m of meshes) { const p = splitMesh(m, c => c.y > cut && Math.abs(c.x) < 1.9 ? 'top' : 'low'); if (p.top) top.push(p.top); }
+    if (top.length) {
+      const b = boxOf(top);
+      v.canister.position.set(0, b.min.y, b.min.z + 0.6); v.canister.rotation.set(0, 0, 0); g.updateMatrixWorld(true);
+      for (const m of top) v.canister.attach(m);
+      v.tip.position.copy(v.canister.worldToLocal(new THREE.Vector3(0, (b.min.y + b.max.y) / 2, b.max.z)));
+    }
+    v.wheels = [];
+    const hiCan = new THREE.Group(); v.canister.add(hiCan); for (const m of [...v.canister.children]) if (m !== hiCan && m.isMesh) hiCan.attach(m);
+    mergeStatic(holder); mergeStatic(hiCan);
+    if (lo) {
+      g.add(lo); lo.visible = true; g.updateMatrixWorld(true);
+      const loCan = new THREE.Group(); v.canister.add(loCan);
+      const lm = []; lo.traverse(o => { if (o.isMesh) lm.push(o); });
+      for (const m of lm) { const p = splitMesh(m, c => c.y > cut && Math.abs(c.x) < 1.9 ? 'top' : 'low'); if (p.top) loCan.attach(p.top); }
+      g.remove(lo);
+      addLod(v, g, [holder, hiCan], lo, col, 0.3);
+      v.mats = v.mats.concat(ownMats(loCan, col, 0.3));
+      v.loParts.push(loCan); loCan.visible = false; lo.visible = false;
+    }
+  },
+  drone(v, col) {
+    const g = v.g; hideProc(g);
+    const holder = fitModel('drone', { len: 1.3, centerY: true });
+    holder.scale.divideScalar(g.scale.x);                     // the drone group itself is scaled
+    g.add(holder); v.mats = ownMats(holder, col, 0.2);
+    addLod(v, g, [holder], fitLike(holder, 'drone_lo'), col, 0.2);
+    v.props = [];
+  },
+  gunner(v, col) {
+    if (!v.man) return;
+    const s = fitModel('soldier', { height: 1.8, skinned: true });
+    v.man.traverse(o => { if (o.isMesh) o.visible = false; });
+    s.position.copy(v.man.position); s.position.z -= 0.1;
+    v.man.parent.add(s);
+    v.mats = v.mats.concat(ownMats(s, col, 0.12));
+    const man = []; v.man.traverse(o => { if (o.isMesh) man.push(o); });
+    v.hiParts = [s]; v.loParts = man; v.lo = false;
+  },
+};
+// ═══════════ TREES: the two tree models, mixed at random ═══════════
+// near the camera: the full models, instanced per 250 m cell; further out: a cut-out picture of the same tree
+// on two crossed quads (rendered once from the model), so thousands of trees stay cheap
+const TREE_CELL = 60; let TREE_NEAR = 110; var TREE_NEAR_T = null;
+const TREE_KINDS = [];
+function floatGeo(src) {
+  const g = new THREE.BufferGeometry(), get = ['getX', 'getY', 'getZ', 'getW'];
+  for (const n of ['position', 'normal', 'uv']) {
+    const a = src.attributes[n]; if (!a) continue;
+    const arr = new Float32Array(a.count * a.itemSize);
+    for (let i = 0; i < a.count; i++) for (let k = 0; k < a.itemSize; k++) arr[i * a.itemSize + k] = a[get[k]](i);
+    g.setAttribute(n, new THREE.BufferAttribute(arr, a.itemSize));
+  }
+  if (src.index) g.setIndex(Array.from(src.index.array));
+  return g;
+}
+function prepTrees() {
+  for (const [name, h0, h1] of [['tree1', 9, 15], ['tree2', 10, 17]]) {
+    const src = MODELS[name]; if (!src) continue;
+    src.updateMatrixWorld(true);
+    const b = new THREE.Box3().setFromObject(src), size = b.getSize(new THREE.Vector3()), c = b.getCenter(new THREE.Vector3());
+    const unit = 1 / size.y;                                   // geometry for a tree 1 m tall, base at the origin
+    const parts = [];
+    src.traverse(o => {
+      if (!o.isMesh) return;
+      const geo = floatGeo(o.geometry);
+      geo.applyMatrix4(o.matrixWorld); geo.translate(-c.x, -b.min.y, -c.z); geo.scale(unit, unit, unit);
+      geo.computeBoundingSphere();
+      const mat = o.material.clone(); mat.envMapIntensity = 0.5;
+      if (mat.map) mat.alphaTest = Math.max(mat.alphaTest, 0.4);
+      camFade(mat, 3, 10);
+      parts.push({ geo, mat });
+    });
+    // impostor: orthographic side and top views of the tree, rendered once
+    const S = Math.max(size.x, size.z, size.y), T = Math.max(size.x, size.z);
+    const sc = new THREE.Scene();
+    sc.add(new THREE.HemisphereLight(0xe4ecf2, 0x4a4535, 1.5));
+    const dl = new THREE.DirectionalLight(0xfff0d8, 1.8); dl.position.set(0.6, 1, 0.8); sc.add(dl);
+    sc.add(src.clone(true));
+    const snap = cam => {
+      const rt = new THREE.WebGLRenderTarget(256, 256);
+      rt.texture.generateMipmaps = true; rt.texture.minFilter = THREE.LinearMipmapLinearFilter; rt.texture.anisotropy = 4;
+      const prevRT = renderer.getRenderTarget(), prevCol = renderer.getClearColor(new THREE.Color()), prevA = renderer.getClearAlpha();
+      renderer.setRenderTarget(rt); renderer.setClearColor(0x000000, 0); renderer.clear(); renderer.render(sc, cam);
+      renderer.setRenderTarget(prevRT); renderer.setClearColor(prevCol, prevA);
+      return new THREE.MeshBasicMaterial({ map: rt.texture, alphaTest: 0.45, side: THREE.DoubleSide, color: 0xd8d8d8 });
+    };
+    const side = new THREE.OrthographicCamera(-S / 2, S / 2, S, 0, 0.1, S * 10);
+    side.position.set(c.x, b.min.y, c.z + S * 3); side.lookAt(c.x, b.min.y, c.z);
+    const top = new THREE.OrthographicCamera(-T / 2, T / 2, T / 2, -T / 2, 0.1, size.y * 4);
+    top.up.set(0, 0, -1); top.position.set(c.x, b.max.y + size.y, c.z); top.lookAt(c.x, b.min.y, c.z);
+    const sideMat = snap(side), topMat = snap(top);
+    const w = S * unit, tw = T * unit, quads = [];
+    for (const ry of [0, Math.PI / 2]) { const q = new THREE.PlaneGeometry(w, w); q.translate(0, w / 2, 0); q.rotateY(ry); quads.push(q); }
+    const tq = new THREE.PlaneGeometry(tw, tw); tq.rotateX(-Math.PI / 2); tq.translate(0, 0.62, 0); quads.push(tq);
+    const ig = mergeGeometries(quads, true);
+    const nr = ig.attributes.normal; for (let i = 0; i < nr.count; i++) nr.setXYZ(i, 0, 1, 0);
+    const imat = [sideMat, sideMat, topMat];
+    TREE_KINDS.push({ parts, imp: { geo: ig, mat: imat }, h0, h1 });
+  }
+}
+// trees: [{x, y, z, s (0.8..1.6), r}]; proc: the old procedural trees, shown until the models are in
+function plantTrees(group, trees, proc) {
+  const st = { group, trees, proc, cells: new Map(), far: [], model: false };
+  const build = () => {
+    if (!TREE_KINDS.length || st.model || !world || world.group !== group) return;
+    st.model = true;
+    if (proc) { group.remove(proc); proc.traverse(o => { if (o.geometry) o.geometry.dispose(); }); }
+    const dummy = new THREE.Object3D(), K = TREE_KINDS.length;
+    const byCell = new Map(), perKind = Array.from({ length: K }, () => []);
+    for (const t of trees) {
+      const k = Math.floor(t.r * 997) % K, kind = TREE_KINDS[k];
+      const h = kind.h0 + (kind.h1 - kind.h0) * Math.min(1, Math.max(0, (t.s - 0.8) / 0.8));
+      dummy.position.set(t.x, t.y - 0.3, t.z); dummy.rotation.set(0, t.r, 0); dummy.scale.setScalar(h); dummy.updateMatrix();
+      const key = Math.floor(t.x / TREE_CELL) + ',' + Math.floor(t.z / TREE_CELL);
+      if (!byCell.has(key)) byCell.set(key, { y: t.y, x: (Math.floor(t.x / TREE_CELL) + 0.5) * TREE_CELL, z: (Math.floor(t.z / TREE_CELL) + 0.5) * TREE_CELL, list: Array.from({ length: K }, () => []), meshes: [], near: false });
+      const m = dummy.matrix.clone();
+      byCell.get(key).list[k].push(m); perKind[k].push(m);
+    }
+    for (const [key, cell] of byCell) {
+      cell.list.forEach((mats, k) => {
+        if (!mats.length) return;
+        for (const p of TREE_KINDS[k].parts) {
+          const im = new THREE.InstancedMesh(p.geo, p.mat, mats.length);
+          mats.forEach((m, i) => im.setMatrixAt(i, m));
+          im.castShadow = false; im.receiveShadow = true; im.visible = false;
+          im.computeBoundingSphere();
+          group.add(im); cell.meshes.push(im);
+        }
+      });
+      st.cells.set(key, cell);
+    }
+    st.far = TREE_KINDS.map((kind, k) => {
+      const im = new THREE.InstancedMesh(kind.imp.geo, kind.imp.mat, Math.max(1, perKind[k].length));
+      im.count = 0; im.frustumCulled = false; group.add(im); return im;
+    });
+    st.dirty = true;
+    updateTrees(true);
+  };
+  if (TREE_KINDS.length) build(); else whenModels(build);
+  return st;
+}
+function updateTrees(force) {
+  const st = world && world.treeState; if (!st || !st.model) return;
+  if (TREE_NEAR_T != null) { TREE_NEAR = TREE_NEAR_T; TREE_NEAR_T = null; force = true; }
+  const cx = camera.position.x, cz = camera.position.z;
+  let changed = !!force || st.dirty;
+  for (const c of st.cells.values()) {
+    const d = Math.hypot(c.x - cx, c.z - cz, Math.max(0, camera.position.y - c.y - 20));
+    const near = d < TREE_NEAR, shad = d < 90;
+    if (near !== c.near) { c.near = near; changed = true; for (const m of c.meshes) m.visible = near; }
+    if (shad !== c.shad) { c.shad = shad; for (const m of c.meshes) m.castShadow = shad; }
+  }
+  if (!changed) return;
+  st.dirty = false;
+  st.far.forEach((im, k) => {
+    let n = 0;
+    for (const c of st.cells.values()) if (!c.near) for (const m of c.list[k]) im.setMatrixAt(n++, m);
+    im.count = n; im.instanceMatrix.needsUpdate = true;
+  });
+}
 
 // ═══════════ VEHICLE ENTITIES ═══════════
 function buildVis(type, team, n) {
@@ -1436,6 +1895,7 @@ function makeVehicle(d) {
   addDetail(d.type, vis, TEAM_COL[d.team]);
   if (d.type !== 'tank') compact(vis.g, visRefs(vis));
   realism(vis.g);
+  dressVis(d.type, vis, TEAM_COL[d.team]);
   scene.add(vis.g);
   const v = {
     vid: d.vid, team: d.team, type: d.type, n: d.n, vis, alive: d.alive, hp: d.hp, max: d.max, driver: d.driver,
@@ -1450,6 +1910,12 @@ function makeVehicle(d) {
   resetVehicle(v, d);
   if (d.st) applyState(v, d.st, true);
   if (!d.alive) { v.vis.g.visible = false; }
+  if (!vis.model) whenModels(() => {
+    if (vehicles.get(v.vid) !== v) return;
+    dressVis(v.type, v.vis, TEAM_COL[v.team]);
+    if (!v.alive || v.dead) for (const m of v.vis.mats) m.color.multiplyScalar(0.3);
+    updateVis(v, 0);
+  });
   return v;
 }
 function spawnY(type, x, z) { return type === 'drone' ? Math.max(H(x, z), 0) + 0.35 : type === 'ship' ? 0 : type === 'plane' ? Math.max(H(x, z), 0) + 1.9 : Math.max(H(x, z), 0); }
@@ -1462,7 +1928,7 @@ function resetVehicle(v, d) {
   v.tgt = { x: BASES[1 - v.team].x, z: BASES[1 - v.team].z }; v.tzoom = 500;
   v.alive = true; v.hp = d.max || v.max;
   v.vis.g.visible = true;
-  for (const m of v.vis.mats) m.color.copy(v.vis.color);
+  for (const m of v.vis.mats) m.color.copy(m.userData.base || v.vis.color);
   updateVis(v, 0);
 }
 // st: [x, y, z, h, p, r, speed, aimYaw, aimPitch, f1, f2]
@@ -1519,9 +1985,10 @@ function updateVis(v, dt) {
     v.vis.turret.rotation.y = rel;
     v.vis.gun.rotation.x = -v.aimPitch;
   } else if (v.type === 'plane') {
-    v.vis.gear.visible = !v.air;
+    v.vis.gear.visible = !v.air && !v.vis.lo;
     v.vis.bombs.forEach((b, i) => { b.visible = i < v.bombs; });
     v.vis.missiles.forEach((m, i) => { m.visible = v.rk > i * 4; });
+    if (v.vis.canopy) v.vis.canopy.rotation.x = v.air || Math.abs(v.speed) > 6 ? 0.42 : 0;
     const k = v.air ? 0.4 + v.f2 * 0.8 : v.f2 * 0.5;
     v.vis.flame.scale.set(1, 0.3 + k, 1); v.vis.core.scale.set(1, 0.3 + k, 1);
     v.vis.flame.visible = v.vis.core.visible = v.alive && !v.dead && (v.f2 > 0.05 || v.air);
@@ -1534,6 +2001,7 @@ function updateVis(v, dt) {
     }
     v.vis.radar.rotation.y += dt * 2;
   }
+  if (v.vis.loParts) lodCheck(v);
   g.updateMatrixWorld(true);
   v.inv.copy(g.matrixWorld).invert();
 }
@@ -3079,7 +3547,7 @@ function frame(now) {
     updateSams(dt);
     updateShots(dt);
     updateSpotting(dt);
-    updateGrass();
+    updateGrass(); updateTrees();
     for (const r of world_radars) r.rotation.y += dt * 1.5;
     if (mode === 'drive') updateDriveCam(dt); else updateCmd(dt);
     updateMarkers();
@@ -3093,7 +3561,7 @@ function frame(now) {
     camera.position.set(-1200 + Math.sin(menuAngle) * 420, 160, 60 + Math.cos(menuAngle) * 420);
     camera.lookAt(-1200, 10, 60);
     setShadowSize(450); placeSun(-1200, 0, 60);
-    updateGrass();
+    updateGrass(); updateTrees();
   }
   particles.update(dt);
   drawHud(now, dt);
