@@ -435,6 +435,14 @@ const waterUniforms = { uTime: { value: 0 } };
 const coastZ = x => 440 + Math.sin(x * 0.0023) * 55 + Math.sin(x * 0.007 + 1) * 15;
 const teamX = (team, x) => team === 0 ? x : -x;
 const roadZ = x => 60 + Math.sin(x * 0.004) * 80;
+// fixed town sites (the terrain is flattened under them; the same every match)
+const TOWN_PADS = [
+  { id: 'old', x: 0, z: -240, hx: 132, hz: 98 },
+  { id: 'country', x: 168, z: -150, hx: 26, hz: 26, like: 'old' },
+  { id: 'vil0', x: -560, z: -260, hx: 88, hz: 90 },
+  { id: 'vil1', x: 560, z: -260, hx: 88, hz: 90 },
+];
+const inPad = (x, z, m = 0) => TOWN_PADS.some(p => Math.abs(x - p.x) < p.hx + m && Math.abs(z - p.z) < p.hz + m);
 const onBasePad = (x, z) => BASES.some(b => Math.hypot(x - b.x, z - b.z) < BASE_R + 15) || (Math.abs(x) > RWY.x0 - 50 && Math.abs(z - RWY.z) < RWY.w + 25);
 
 function buildWorld(seed) {
@@ -446,7 +454,7 @@ function buildWorld(seed) {
     // rolling hills, flattened at both bases and their runways
     let h = BASE_Y + Math.max(-3, fbm(x * 0.0024 + 3, z * 0.0024 - 2) * 85 + 10);
     let flat = 0;
-    for (const b of BASES) flat = Math.max(flat, 1 - smooth(BASE_R - 40, BASE_R + 120, Math.hypot(x - b.x, z - b.z)));
+    for (const b of BASES) flat = Math.max(flat, 1 - smooth(BASE_R + 50, BASE_R + 190, Math.hypot(x - b.x, z - b.z)));
     const ax = Math.abs(x);
     if (ax > RWY.x0 - 60 && ax < RWY.x1 + 60) flat = Math.max(flat, 1 - smooth(RWY.w, RWY.w + 70, Math.abs(z - RWY.z)));
     h = lerp(h, BASE_Y, flat);
@@ -459,6 +467,22 @@ function buildWorld(seed) {
     if (z > cz) h = Math.max(-26, 1.2 - (z - cz) * 0.17);
     return h + (n2(x * 0.05, z * 0.05) - .5) * 0.6 * (1 - flat);
   };
+  // town sites: flat at the average height of their footprint, blending out over 70 m
+  { const H0 = H;
+    for (const p of TOWN_PADS) {
+      if (p.like) { p.y = TOWN_PADS.find(q => q.id === p.like).y; continue; }
+      let s = 0, n = 0; for (let i = -4; i <= 4; i++) for (let k = -4; k <= 4; k++) { s += H0(p.x + i / 4 * p.hx, p.z + k / 4 * p.hz); n++; }
+      p.y = Math.max(BASE_Y, s / n);
+    }
+    H = (x, z) => {
+      let h = H0(x, z);
+      for (const p of TOWN_PADS) {
+        const d = Math.hypot(Math.max(0, Math.abs(x - p.x) - p.hx), Math.max(0, Math.abs(z - p.z) - p.hz));
+        if (d < 70) h = lerp(h, p.y, 1 - smooth(0, 70, d));
+      }
+      return h;
+    };
+  }
 
   const group = new THREE.Group();
   const boxes = [];             // axis-aligned solid blocks {x,z,hx,hz,y0,y1}
@@ -474,8 +498,8 @@ function buildWorld(seed) {
   geo = geo.toNonIndexed(); geo.computeVertexNormals();
   const p2 = geo.attributes.position, nrm = geo.attributes.normal;
   const cols = new Float32Array(p2.count * 3);
-  const cG1 = new THREE.Color(0x7d8a4c), cG2 = new THREE.Color(0x96904f), cDirt = new THREE.Color(0x8a7653), cRock = new THREE.Color(0x77736a),
-        cSand = new THREE.Color(0xcbb98a), cWet = new THREE.Color(0x8d8466), cBase = new THREE.Color(0x8e8c84), cSnow = new THREE.Color(0xe8ebe6), c = new THREE.Color();
+  const cG1 = new THREE.Color(1.22, 1.24, 1.12), cG2 = new THREE.Color(1.34, 1.28, 1.08), cDirt = new THREE.Color(1.3, 1.12, 0.92), cRock = new THREE.Color(1.15, 1.12, 1.08),
+        cSand = new THREE.Color(1.9, 1.75, 1.3), cWet = new THREE.Color(1.1, 1.02, 0.86), cBase = new THREE.Color(1.15, 1.13, 1.1), cSnow = new THREE.Color(2.6, 2.65, 2.7), c = new THREE.Color();
   for (let i = 0; i < p2.count; i += 3) {
     const x = (p2.getX(i) + p2.getX(i + 1) + p2.getX(i + 2)) / 3, y = (p2.getY(i) + p2.getY(i + 1) + p2.getY(i + 2)) / 3, z = (p2.getZ(i) + p2.getZ(i + 1) + p2.getZ(i + 2)) / 3;
     const slope = 1 - nrm.getY(i);
@@ -483,21 +507,23 @@ function buildWorld(seed) {
     if (n2(x * 0.02 + 9, z * 0.02) > 0.7) c.lerp(cDirt, 0.6);
     if (slope > 0.18) c.lerp(cRock, Math.min(1, (slope - 0.18) * 3));
     if (y > 200) c.lerp(cSnow, smooth(200, 270, y) * 0.85);
-    for (const b of BASES) if (Math.hypot(x - b.x, z - b.z) < BASE_R) c.lerp(cBase, 0.65);
+    for (const b of BASES) if (Math.hypot(x - b.x, z - b.z) < BASE_R) c.lerp(cBase, 0.5);
+    if (inPad(x, z, -4)) c.lerp(cBase, 0.35);
     if (y < 3) c.lerp(cSand, smooth(3, 1, y));
     if (y < 0) c.copy(cWet);
     c.multiplyScalar(0.94 + rand() * 0.1);
     for (let k = 0; k < 3; k++) { cols[(i + k) * 3] = c.r; cols[(i + k) * 3 + 1] = c.g; cols[(i + k) * 3 + 2] = c.b; }
   }
   geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
-  const detailTex = (() => {
-    const cv = document.createElement('canvas'); cv.width = cv.height = 256; const g = cv.getContext('2d');
-    g.fillStyle = '#e4e4e4'; g.fillRect(0, 0, 256, 256);
-    for (let i = 0; i < 5200; i++) { const v = 150 + Math.random() * 105 | 0; g.fillStyle = `rgba(${v},${v},${v},${0.25 + Math.random() * 0.5})`; const r = 0.6 + Math.random() * 2.2; g.fillRect(Math.random() * 256, Math.random() * 256, r, r * (0.6 + Math.random())); }
-    for (let i = 0; i < 26; i++) { g.fillStyle = `rgba(120,120,120,${0.1 + Math.random() * 0.12})`; g.beginPath(); g.arc(Math.random() * 256, Math.random() * 256, 6 + Math.random() * 16, 0, TAU); g.fill(); }
-    const t = new THREE.CanvasTexture(cv); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(SX / 14, SZ / 14); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; return t;
-  })();
-  const terrain = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, map: detailTex, roughness: 1, flatShading: true }));
+  const groundTex = new THREE.TextureLoader().load('models/ground.jpg');
+  groundTex.wrapS = groundTex.wrapT = THREE.RepeatWrapping; groundTex.repeat.set(SX / 16, SZ / 16); groundTex.colorSpace = THREE.SRGBColorSpace; groundTex.anisotropy = 8;
+  const tmat = new THREE.MeshStandardMaterial({ vertexColors: true, map: groundTex, roughness: 1, flatShading: true });
+  // two scales of the same ground picture, so the repeat doesn't show
+  tmat.onBeforeCompile = sh => { sh.fragmentShader = sh.fragmentShader.replace('#include <map_fragment>', `
+    vec4 sampledDiffuseColor = texture2D( map, vMapUv );
+    vec4 tex2 = texture2D( map, vMapUv * 0.213 + vec2(0.37, 0.71) );
+    diffuseColor *= mix( sampledDiffuseColor, tex2, 0.45 );`); };
+  const terrain = new THREE.Mesh(geo, tmat);
   terrain.receiveShadow = true;
   group.add(terrain);
 
@@ -629,25 +655,7 @@ function buildWorld(seed) {
     world_flags.push(flag); world_radars.push(radar);
   }
 
-  // ── village in the middle, farms, forests ──
-  { const cx = 30, cz = roadZ(30) - 34, cy = H(cx, cz) - 0.6;                                            // church
-    block(cx, cz, 10, 9, 18, mWhite, cy); mk(new THREE.ConeGeometry(8.6, 5, 4), mRoof, cx, cy + 11.5, cz, Math.PI / 4).scale.set(0.62, 1, 1.1);
-    block(cx, cz + 11, 5, 17, 5, mWhite, cy); mk(new THREE.ConeGeometry(3.8, 8, 4), mRed, cx, cy + 21, cz + 11, Math.PI / 4);
-    winBox(cx, cz, 10, 18, cy + 5); }
-  for (let i = 0, tries = 0; i < 30 && tries < 700; tries++) {
-    const x = (rand() - .5) * 600, z = (rand() - .5) * 560 - 80;
-    const y = H(x, z);
-    if (Math.abs(z - roadZ(x)) < 15) continue;
-    if (Math.abs(H(x + 8, z) - y) + Math.abs(H(x, z + 8) - y) > 3 || boxes.some(b => Math.abs(b.x - x) < 22 && Math.abs(b.z - z) < 22)) continue;
-    const w = 8 + rand() * 6, d = 8 + rand() * 6, hh = 5 + rand() * 4;
-    block(x, z, w, hh, d, rand() < .5 ? mWall : mWall2, y - 0.6);
-    const roof = mk(new THREE.ConeGeometry(Math.max(w, d) * 0.75, 4, 4), rand() < .4 ? mRed : mRoof, x, y - 0.6 + hh + 2, z, Math.PI / 4);
-    roof.scale.set(w / Math.max(w, d), 1, d / Math.max(w, d));
-    winBox(x, z, w, d, y + 2.4);
-    mk(new THREE.BoxGeometry(1.4, 2.6, 0.2), mWood, x, y + 0.7, z + d / 2 + 0.05);
-    mk(new THREE.BoxGeometry(1, 3, 1), mWall, x + w * 0.22, y + hh + 1.6, z - d * 0.15);
-    i++;
-  }
+  // ── forests (the village is now the town models, placed when they load) ──
   const crownGeo = new THREE.ConeGeometry(2.8, 9, 6); crownGeo.translate(0, 7, 0);
   const trunkGeo = new THREE.CylinderGeometry(.35, .5, 3.4, 5); trunkGeo.translate(0, 1.7, 0);
   const trees = [];
@@ -656,10 +664,10 @@ function buildWorld(seed) {
     const cl = clusters[i % clusters.length];
     const x = cl[0] + (rand() - .5) * 220, z = cl[1] + (rand() - .5) * 220, y = H(x, z);
     if (y < 3 || y > 160) continue;
-    if (BASES.some(b => Math.hypot(x - b.x, z - b.z) < BASE_R + 60)) continue;
+    if (BASES.some(b => Math.hypot(x - b.x, z - b.z) < BASE_R + 90)) continue;
     if (Math.abs(x) < 1020 && Math.abs(z - roadZ(x)) < 11) continue;
     if (Math.abs(x) > RWY.x0 - 80 && Math.abs(z - RWY.z) < 110) continue;
-    if (boxes.some(b => Math.abs(b.x - x) < b.hx + 4 && Math.abs(b.z - z) < b.hz + 4)) continue;
+    if (boxes.some(b => Math.abs(b.x - x) < b.hx + 4 && Math.abs(b.z - z) < b.hz + 4) || inPad(x, z, 12)) continue;
     trees.push({ x, y, z, s: 0.8 + rand() * 0.8, r: rand() * TAU });
   }
   const pineMat = camFade(M(0x4b5e36, { roughness: 1 }), 3, 10), trunkMat = M(0x5a4a3a);
@@ -683,17 +691,17 @@ function buildWorld(seed) {
   // ── bushes, boulders, hay bales, clouds ──
   for (let i = 0; i < 9000 && PR.bush.length < 2200; i++) {
     const x = (rand() * 2 - 1) * (MAP_X - 100), z = (rand() * 2 - 1) * 760 - 240, y = H(x, z);
-    if (y < 3 || y > 170 || onBasePad(x, z) || Math.abs(z - roadZ(x)) < 8) continue;
+    if (y < 3 || y > 170 || onBasePad(x, z) || Math.abs(z - roadZ(x)) < 8 || inPad(x, z, 6)) continue;
     PR.bush.push([x, y + 0.5, z, rand() * 3, 0.6 + rand() * 1.1]);
   }
   for (let i = 0; i < 4000 && PR.rock.length < 700; i++) {
     const x = (rand() * 2 - 1) * (MAP_X - 60), z = (rand() * 2 - 1) * (MAP_Z - 100), y = H(x, z);
-    if (y < 1 || onBasePad(x, z) || Math.abs(z - roadZ(x)) < 8) continue;
+    if (y < 1 || onBasePad(x, z) || Math.abs(z - roadZ(x)) < 8 || inPad(x, z, 6)) continue;
     PR.rock.push([x, y + 0.2, z, rand() * 6, 0.5 + rand() * rand() * 3.5, rand() * 3]);
   }
   for (let i = 0; i < 600 && PR.hay.length < 40; i++) {
     const x = (rand() - .5) * 900, z = (rand() - .5) * 700 - 60, y = H(x, z);
-    if (y < 4 || Math.abs(H(x + 5, z) - y) > 0.8 || Math.abs(z - roadZ(x)) < 9 || boxes.some(b => Math.abs(b.x - x) < b.hx + 3 && Math.abs(b.z - z) < b.hz + 3)) continue;
+    if (y < 4 || Math.abs(H(x + 5, z) - y) > 0.8 || Math.abs(z - roadZ(x)) < 9 || inPad(x, z, 8) || boxes.some(b => Math.abs(b.x - x) < b.hx + 3 && Math.abs(b.z - z) < b.hz + 3)) continue;
     PR.hay.push([x, y + 1.0, z, rand() * 3, 1, Math.PI / 2]);
   }
   for (let i = 0; i < 46; i++) { const cx = (rand() * 2 - 1) * (MAP_X + 600), cz = (rand() * 2 - 1) * (MAP_Z + 600), cy = 700 + rand() * 400;
@@ -720,12 +728,35 @@ function buildWorld(seed) {
 
   compact(group, new Set([...world_radars, ...samSites.map(q => q.rad), ...samSites.map(q => q.turn)]));
   scene.add(group);
-  world = { group, boxes, trees, samSites, seed };
+  world = { group, boxes, trees, samSites, seed, boxGrid: new Map() };
+  for (const b of boxes) gridAddBox(b);
   world.treeState = plantTrees(group, trees, treeProc);
+  world.towns = setupTowns(group, seed);
   for (let i = 0; i < GR_N * 2; i++) grC[i] = 1e9;
   buildMinimapBase();
 }
 const world_flags = [], world_radars = [];
+// ── solid blocks in a coarse grid, so buildings by the hundred stay cheap to test ──
+const BOX_CELL = 40;
+let _boxStamp = 1;
+const _boxOut = [];
+function gridAddBox(b) {
+  const g = world.boxGrid;
+  const i0 = Math.floor((b.x - b.hx) / BOX_CELL), i1 = Math.floor((b.x + b.hx) / BOX_CELL), k0 = Math.floor((b.z - b.hz) / BOX_CELL), k1 = Math.floor((b.z + b.hz) / BOX_CELL);
+  for (let i = i0; i <= i1; i++) for (let k = k0; k <= k1; k++) { const key = i * 65536 + k; let l = g.get(key); if (!l) g.set(key, l = []); l.push(b); }
+}
+// boxes overlapping the rectangle [x0,x1]×[z0,z1] (a shared array: use it before the next call)
+function boxesIn(x0, z0, x1, z1) {
+  _boxOut.length = 0; const st = ++_boxStamp, g = world.boxGrid;
+  if (x0 > x1) { const t = x0; x0 = x1; x1 = t; } if (z0 > z1) { const t = z0; z0 = z1; z1 = t; }
+  const i0 = Math.floor(x0 / BOX_CELL), i1 = Math.floor(x1 / BOX_CELL), k0 = Math.floor(z0 / BOX_CELL), k1 = Math.floor(z1 / BOX_CELL);
+  if ((i1 - i0 + 1) * (k1 - k0 + 1) > 400) return world.boxes;     // a very long ray: just test everything
+  for (let i = i0; i <= i1; i++) for (let k = k0; k <= k1; k++) {
+    const l = g.get(i * 65536 + k); if (!l) continue;
+    for (const b of l) if (b._st !== st) { b._st = st; _boxOut.push(b); }
+  }
+  return _boxOut;
+}
 function landY(x, z) { return Math.max(H(x, z), -30); }
 
 // ═══════════ RAYS ═══════════
@@ -772,7 +803,7 @@ function castRay(o, d, maxT, ignoreVid = null, opts = {}) {
   if (tt !== null) best = { t: tt, kind: 'terrain' };
   if (!opts.noWater && d[1] < 0 && o[1] > 0) { const tw = -o[1] / d[1]; if (tw <= maxT && (!best || tw < best.t) && H(o[0] + d[0] * tw, o[2] + d[2] * tw) < 0) best = { t: tw, kind: 'water' }; }
   const lim = best ? best.t : maxT;
-  for (const b of world.boxes) { const t = rayBox(o, d, b); if (t !== null && t < (best ? best.t : lim)) best = { t, kind: 'box' }; }
+  for (const b of boxesIn(o[0], o[2], o[0] + d[0] * lim, o[2] + d[2] * lim)) { const t = rayBox(o, d, b); if (t !== null && t < (best ? best.t : lim)) best = { t, kind: 'box' }; }
   if (!opts.noVeh) for (const v of vehicles.values()) {
     if (v.vid === ignoreVid || !v.vis.g.visible) continue;
     const dx = v.pos.x - o[0], dy = v.pos.y - o[1], dz = v.pos.z - o[2];
@@ -798,8 +829,9 @@ const _gd = new THREE.Object3D();
 function updateGrass() {
   if (!world) return;
   const cx = camera.position.x, cz = camera.position.z;
+  grassMesh.visible = false;
+  if (grassMesh.visible === false) return;            // the cone grass is switched off
   const high = camera.position.y - Math.max(0, H(cx, cz)) > 200;
-  grassMesh.visible = !high;
   if (high) return;
   let ch = false;
   for (let i = 0; i < GR_N; i++) {
@@ -1374,7 +1406,8 @@ const modelWaiters = [];
 function whenModels(fn) { if (modelsDone) fn(); else modelWaiters.push(fn); }
 {
   const L = new GLTFLoader(); L.setMeshoptDecoder(MeshoptDecoder);
-  const names = ['tank', 'jet', 'ship', 'jeep', 'topol', 'drone', 'soldier', 'tree1', 'tree2', 'tank_lo', 'jet_lo', 'ship_lo', 'jeep_lo', 'topol_lo', 'drone_lo'];
+  const names = ['tank', 'jet', 'ship', 'jeep', 'topol', 'drone', 'soldier', 'tree1', 'tree2', 'tank_lo', 'jet_lo', 'ship_lo', 'jeep_lo', 'topol_lo', 'drone_lo',
+    'oldtown', 'oldtown_lo', 'country', 'country_lo', 'abandoned', 'abandoned_lo'];
   let left = names.length;
   const done = () => {
     if (--left > 0) return;
@@ -1505,7 +1538,7 @@ const _m4 = new THREE.Matrix4();
 function mergeStatic(root) {
   root.updateMatrixWorld(true);
   const inv = new THREE.Matrix4().copy(root.matrixWorld).invert(), by = new Map();
-  root.traverse(o => { if (o.isMesh && !o.isSkinnedMesh && o.visible) { if (!by.has(o.material)) by.set(o.material, []); by.get(o.material).push(o); } });
+  root.traverse(o => { if (o.isMesh && !o.isSkinnedMesh && o.visible && !o.userData.keep) { if (!by.has(o.material)) by.set(o.material, []); by.get(o.material).push(o); } });
   for (const [mat, list] of by) {
     if (list.length < 2) continue;
     const geos = list.map(m => {
@@ -1542,6 +1575,79 @@ function prepModels() {
     const head = bone(/Head(_\d+)?$/); if (head) { head.rotation.x += 0.15; head.updateMatrixWorld(true); }
   }
   prepTrees();
+  prepTowns();
+}
+
+// ── moving tank tracks ──
+// the tracks are chains of separate links; a vertex shader slides every link along the loop around the wheels.
+// Per vertex we store where it sits along the loop (s) and how far outside the loop's line it is (d).
+const TRK_K = 128;
+function trackRig(mesh) {
+  const geo = mesh.geometry;
+  if (!geo.userData.trk) {
+    // which geometry axes are the tank's forward and up
+    const e = mesh.matrixWorld.elements, col = i => [e[i * 4], e[i * 4 + 1], e[i * 4 + 2]];
+    const cols = [col(0), col(1), col(2)];
+    const axU = [0, 1, 2].reduce((a, b) => Math.abs(cols[b][1]) > Math.abs(cols[a][1]) ? b : a, 0);
+    const axF = [0, 1, 2].filter(i => i !== axU).reduce((a, b) => Math.abs(cols[b][2]) > Math.abs(cols[a][2]) ? b : a);
+    const pos = geo.attributes.position, n = pos.count, comp = ['getX', 'getY', 'getZ'];
+    const P = new Float32Array(n * 2);
+    for (let i = 0; i < n; i++) { P[i * 2] = pos[comp[axF]](i); P[i * 2 + 1] = pos[comp[axU]](i); }
+    // convex hull of the side profile (monotone chain), counter-clockwise
+    const idx = Array.from({ length: n }, (_, i) => i).sort((a, b) => P[a * 2] - P[b * 2] || P[a * 2 + 1] - P[b * 2 + 1]);
+    const cross = (o, a, b) => (P[a * 2] - P[o * 2]) * (P[b * 2 + 1] - P[o * 2 + 1]) - (P[a * 2 + 1] - P[o * 2 + 1]) * (P[b * 2] - P[o * 2]);
+    const lo = [], up = [];
+    for (const i of idx) { while (lo.length > 1 && cross(lo[lo.length - 2], lo[lo.length - 1], i) <= 0) lo.pop(); lo.push(i); }
+    for (let k = idx.length - 1; k >= 0; k--) { const i = idx[k]; while (up.length > 1 && cross(up[up.length - 2], up[up.length - 1], i) <= 0) up.pop(); up.push(i); }
+    const hull = lo.slice(0, -1).concat(up.slice(0, -1)).map(i => [P[i * 2], P[i * 2 + 1]]);
+    // resample the loop evenly by length
+    const segL = hull.map((p, i) => { const q = hull[(i + 1) % hull.length]; return Math.hypot(q[0] - p[0], q[1] - p[1]); });
+    const L = segL.reduce((a, b) => a + b, 0);
+    const path = new Float32Array(TRK_K * 2);
+    for (let k = 0, j = 0, acc = 0; k < TRK_K; k++) {
+      const want = k / TRK_K * L;
+      while (acc + segL[j] < want) { acc += segL[j]; j = (j + 1) % hull.length; }
+      const t = (want - acc) / (segL[j] || 1), p = hull[j], q = hull[(j + 1) % hull.length];
+      path[k * 2] = p[0] + (q[0] - p[0]) * t; path[k * 2 + 1] = p[1] + (q[1] - p[1]) * t;
+    }
+    // each vertex: nearest point on the loop → (s, d)
+    const trk = new Float32Array(n * 2);
+    for (let i = 0; i < n; i++) {
+      const x = P[i * 2], y = P[i * 2 + 1]; let best = 1e18, bs = 0, bd = 0;
+      for (let k = 0; k < TRK_K; k++) {
+        const ax = path[k * 2], ay = path[k * 2 + 1], bx = path[((k + 1) % TRK_K) * 2], by = path[((k + 1) % TRK_K) * 2 + 1];
+        const dx = bx - ax, dy = by - ay, ll = dx * dx + dy * dy || 1e-9;
+        const u = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / ll));
+        const px = ax + dx * u, py = ay + dy * u, dd = (x - px) ** 2 + (y - py) ** 2;
+        if (dd < best) { best = dd; bs = (k + u) / TRK_K * L; const sl = Math.sqrt(ll); bd = ((x - px) * dy - (y - py) * dx) / sl; }
+      }
+      trk[i * 2] = bs; trk[i * 2 + 1] = bd;
+    }
+    geo.setAttribute('aTrk', new THREE.BufferAttribute(trk, 2));
+    // which way to slide so the top run moves forward when the tank drives forward
+    let top = 0; for (let k = 1; k < TRK_K; k++) if (path[k * 2 + 1] * Math.sign(cols[axU][1]) > path[top * 2 + 1] * Math.sign(cols[axU][1])) top = k;
+    const tdir = path[((top + 1) % TRK_K) * 2] - path[top * 2];
+    const unit = Math.hypot(...cols[axF]);                       // world metres per geometry unit along forward
+    geo.userData.trk = { path, L, axF, axU, sign: Math.sign(tdir * cols[axF][2]) || 1, unit };
+  }
+  const T = geo.userData.trk, A = 'xyz';
+  const uOff = { value: 0 };
+  const mat = mesh.material.clone(); mat.userData = Object.assign({}, mesh.material.userData);
+  mat.onBeforeCompile = sh => {
+    sh.uniforms.uTrkOff = uOff; sh.uniforms.uTrkLen = { value: T.L };
+    sh.uniforms.uTrkP = { value: Array.from({ length: TRK_K }, (_, k) => new THREE.Vector2(T.path[k * 2], T.path[k * 2 + 1])) };
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', `#include <common>
+attribute vec2 aTrk; uniform float uTrkOff; uniform float uTrkLen; uniform vec2 uTrkP[${TRK_K}];`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+{ float s = mod(aTrk.x + uTrkOff, uTrkLen); float f = s / uTrkLen * ${TRK_K}.0;
+  int i0 = int(floor(f)); if (i0 >= ${TRK_K}) i0 = 0; int i1 = i0 + 1; if (i1 >= ${TRK_K}) i1 = 0;
+  vec2 p0 = uTrkP[i0], p1 = uTrkP[i1]; vec2 tt = p1 - p0; float tl = length(tt); tt = tl > 1e-6 ? tt / tl : vec2(1.0, 0.0);
+  vec2 q = mix(p0, p1, fract(f)) + vec2(tt.y, -tt.x) * aTrk.y;
+  transformed.${A[T.axF]} = q.x; transformed.${A[T.axU]} = q.y; }`);
+  };
+  mat.customProgramCacheKey = () => 'trk' + T.L.toFixed(4);
+  mesh.material = mat;
+  return { mat, uOff, k: T.sign / T.unit, L: T.L };
 }
 
 // ── per-type fitting ──
@@ -1573,7 +1679,11 @@ const DRESS = {
       const p = pivotAt(g, _mb.getCenter(new THREE.Vector3()), w);
       p.userData.r = Math.max(0.15, (_mb.max.y - _mb.min.y) / 2); wheels.push(p);
     }
-    Object.assign(v, { turret, gun, tip, barrel: cannon, wheels, tracks: [] });
+    // tracks: every track mesh gets its own sliding-link material
+    const trackMeshes = []; for (const tn of nodes(/^(Track_low|Link_low)/)) tn.traverse(o => { if (o.isMesh) trackMeshes.push(o); });
+    const trk = [];
+    for (const m of trackMeshes) { try { const r = trackRig(m); r.mat.userData.base = r.mat.userData.base || r.mat.color.clone(); v.mats.push(r.mat); trk.push(r); m.userData.keep = true; } catch (e) { console.warn('track rig', e); } }
+    Object.assign(v, { turret, gun, tip, barrel: cannon, wheels, tracks: [], trk });
     mergeStatic(model);
     if (MODELS.tank_lo) { const lo = MODELS.tank_lo.clone(true); lo.scale.setScalar(S); lo.position.copy(model.position); lo.visible = false; addLod(v, g, [model, turret, ...wheels], lo, col, 0.42); }
   },
@@ -1826,6 +1936,162 @@ function updateTrees(force) {
     im.count = n; im.instanceMatrix.needsUpdate = true;
   });
 }
+// ═══════════ TOWNS ═══════════
+// the old walled town in the middle, the countryside farmstead beside it, two abandoned towns either side,
+// and blocks of the abandoned town scattered through both bases. Colliders come from the models' own shapes.
+const SPAWN_PTS = [   // team 0 layout (server.js LAYOUT); team 1 is mirrored in x
+  [-1110, -10], [-1110, 25], [-1110, 60], [-1170, 150], [-1150, 165], [-1130, 180], [-1430, -262], [-1395, -238],
+  [-1265, 110], [-1185, 14], [-1185, 22], [-985, 40], [-1010, 215], [-1150, 405],
+];
+const TOWN_T = {};
+// the abandoned town is a cross of two streets; its four corner blocks are cut apart so they can be placed on their own
+const AB_CX = 0.2, AB_CZ = -0.8;
+function prepTowns() {
+  const tpl = (name) => { const s = MODELS[name]; if (s) { s.updateMatrixWorld(true); s.traverse(o => { if (o.isMesh) { o.castShadow = o.receiveShadow = true; if (o.material) o.material.envMapIntensity = 0.6; } }); } return s; };
+  for (const n of ['oldtown', 'oldtown_lo', 'country', 'country_lo', 'abandoned', 'abandoned_lo']) tpl(n);
+  // quadrant templates (model space): split every mesh by the side of the crossing its triangles are on
+  for (const lvl of ['abandoned', 'abandoned_lo']) {
+    const src = MODELS[lvl]; if (!src) continue;
+    const q = { NE: new THREE.Group(), NW: new THREE.Group(), SE: new THREE.Group(), SW: new THREE.Group(), ALL: new THREE.Group() };
+    const meshes = []; src.traverse(o => { if (o.isMesh) meshes.push(o); });
+    const tmp = new THREE.Group();
+    for (const m of meshes) {
+      const c = m.clone(); c.matrix.copy(m.matrixWorld); c.matrix.decompose(c.position, c.quaternion, c.scale); tmp.add(c); tmp.updateMatrixWorld(true);
+      // the whole town (minus the stray scraps) and its four corner blocks
+      const c2 = c.clone(); tmp.add(c2);
+      const whole = splitMesh(c2, p => (p.x > 9 && p.z < -9) ? 'drop' : 'ALL'); if (whole.ALL) q.ALL.add(whole.ALL);
+      const parts = splitMesh(c, p => (p.x > 9 && p.z < -9) ? 'drop' : (p.z < AB_CZ ? 'N' : 'S') + (p.x < AB_CX ? 'W' : 'E'));
+      for (const [k, pm] of Object.entries(parts)) if (q[k] && k !== 'ALL') q[k].add(pm);
+    }
+    TOWN_T[lvl] = q;
+  }
+}
+// one placed piece: a LOD with the full and the light model; returns the full-detail object (for colliders)
+function placePiece(group, hi, lo, at, s, ry, cx, cz, far) {
+  const lod = new THREE.LOD(); lod.position.copy(at); lod.rotation.y = ry;
+  const make = src => { const o = src.clone(true); o.scale.setScalar(s); o.position.set(-cx * s, 0, -cz * s); return o; };
+  const h = make(hi); lod.addLevel(h, 0);
+  if (lo) lod.addLevel(make(lo), far);
+  group.add(lod); lod.updateMatrixWorld(true);
+  return { lod, hi: h };
+}
+// colliders: rasterise the model's triangles that stand above the ground into a height grid, merge solid cells into boxes
+function boxesFromModel(root, groundY, cell = 2, minH = 2.2) {
+  root.updateMatrixWorld(true);
+  const bb = new THREE.Box3().setFromObject(root);
+  const x0 = bb.min.x, z0 = bb.min.z, nx = Math.ceil((bb.max.x - x0) / cell) + 1, nz = Math.ceil((bb.max.z - z0) / cell) + 1;
+  const hg = new Float32Array(nx * nz).fill(-1e9);
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), p = new THREE.Vector3();
+  root.traverse(o => {
+    if (!o.isMesh) return;
+    const pos = o.geometry.attributes.position, idx = o.geometry.index, n = idx ? idx.count : pos.count, gi = i => idx ? idx.getX(i) : i;
+    for (let i = 0; i < n; i += 3) {
+      a.fromBufferAttribute(pos, gi(i)).applyMatrix4(o.matrixWorld); b.fromBufferAttribute(pos, gi(i + 1)).applyMatrix4(o.matrixWorld); c.fromBufferAttribute(pos, gi(i + 2)).applyMatrix4(o.matrixWorld);
+      const ymax = Math.max(a.y, b.y, c.y);
+      if (ymax - groundY < minH) continue;
+      const L = Math.max(Math.hypot(a.x - b.x, a.z - b.z), Math.hypot(b.x - c.x, b.z - c.z), Math.hypot(c.x - a.x, c.z - a.z));
+      const k = Math.min(60, Math.ceil(L / (cell * 0.5)));
+      for (let u = 0; u <= k; u++) for (let v = 0; v <= k - u; v++) {
+        p.copy(a).addScaledVector(b.clone().sub(a), u / k || 0).addScaledVector(c.clone().sub(a), v / k || 0);
+        const ix = Math.floor((p.x - x0) / cell), iz = Math.floor((p.z - z0) / cell);
+        if (ix >= 0 && iz >= 0 && ix < nx && iz < nz && hg[iz * nx + ix] < ymax) hg[iz * nx + ix] = ymax;
+      }
+    }
+  });
+  // greedy merge: runs along x, then stack identical runs along z
+  const solid = i => hg[i] - groundY >= minH, used = new Uint8Array(nx * nz), out = [];
+  for (let iz = 0; iz < nz; iz++) for (let ix = 0; ix < nx; ix++) {
+    if (used[iz * nx + ix] || !solid(iz * nx + ix)) continue;
+    let ex = ix; while (ex + 1 < nx && !used[iz * nx + ex + 1] && solid(iz * nx + ex + 1)) ex++;
+    let ez = iz;
+    for (;;) { const z2 = ez + 1; if (z2 >= nz) break; let ok = true; for (let x = ix; x <= ex; x++) if (used[z2 * nx + x] || !solid(z2 * nx + x)) { ok = false; break; } if (!ok) break; ez = z2; }
+    let top = -1e9; for (let z = iz; z <= ez; z++) for (let x = ix; x <= ex; x++) { used[z * nx + x] = 1; top = Math.max(top, hg[z * nx + x]); }
+    out.push({ x: x0 + (ix + ex + 1) / 2 * cell, z: z0 + (iz + ez + 1) / 2 * cell, hx: (ex - ix + 1) / 2 * cell, hz: (ez - iz + 1) / 2 * cell, y0: groundY - 1, y1: top });
+  }
+  return out;
+}
+// colliders of an abandoned-town block, computed once per size in the block's own frame, then moved into place
+const _pbCache = new Map();
+function pieceBoxes(k, s, cx, cz) {
+  const key = k + '@' + s + '@' + cx.toFixed(2) + cz.toFixed(2);
+  if (!_pbCache.has(key)) {
+    const o = TOWN_T.abandoned[k].clone(true); o.scale.setScalar(s); o.position.set(-cx * s, 0, -cz * s);
+    const g = new THREE.Group(); g.add(o);
+    _pbCache.set(key, boxesFromModel(g, 0, 2, 2.2));
+  }
+  return _pbCache.get(key);
+}
+function xformBoxes(list, x, y, z, ry) {
+  const c = Math.cos(ry), s = Math.sin(ry), odd = Math.abs(Math.round(s)) === 1;
+  return list.map(b => ({ x: x + b.x * c + b.z * s, z: z - b.x * s + b.z * c, hx: odd ? b.hz : b.hx, hz: odd ? b.hx : b.hz, y0: y + b.y0, y1: y + b.y1 }));
+}
+function setupTowns(group, seed) {
+  const st = { group, pieces: [], done: false };
+  const build = () => {
+    if (st.done || !world || world.group !== group || !TOWN_T.abandoned) return;
+    st.done = true;
+    const addBoxes = list => { for (const b of list) { world.boxes.push(b); gridAddBox(b); } };
+    const pad = id => TOWN_PADS.find(p => p.id === id);
+    // old town in the middle, scaled up big
+    if (MODELS.oldtown) {
+      const p = pad('old'), s = 110;
+      const pc = placePiece(group, MODELS.oldtown, MODELS.oldtown_lo, new THREE.Vector3(p.x, p.y - 0.4, p.z), s, 0, 1.113, -0.388, 650);
+      addBoxes(boxesFromModel(pc.hi, p.y, 2.5, 3)); st.pieces.push(pc);
+    }
+    if (MODELS.country) {
+      const p = pad('country'), s = 1.6;
+      const pc = placePiece(group, MODELS.country, MODELS.country_lo, new THREE.Vector3(p.x, p.y - 0.25, p.z), s, Math.PI / 2, -0.133, 1.207, 260);
+      addBoxes(boxesFromModel(pc.hi, p.y, 1.5, 2)); st.pieces.push(pc);
+    }
+    // two whole abandoned towns either side of the middle
+    const ub = new THREE.Box3(); for (const k of ['NE', 'NW', 'SE', 'SW']) ub.union(new THREE.Box3().setFromObject(TOWN_T.abandoned[k]));
+    const ucx = (ub.min.x + ub.max.x) / 2, ucz = (ub.min.z + ub.max.z) / 2;
+    for (const [id, ry] of [['vil0', 0], ['vil1', Math.PI]]) {
+      const p = pad(id);
+      const pc = placePiece(group, TOWN_T.abandoned.ALL, TOWN_T.abandoned_lo && TOWN_T.abandoned_lo.ALL, new THREE.Vector3(p.x, p.y + 0.3, p.z), 4.5, ry, ucx, ucz, 260);
+      for (const k of ['NE', 'NW', 'SE', 'SW']) addBoxes(xformBoxes(pieceBoxes(k, 4.5, ucx, ucz), p.x, p.y, p.z, ry));
+      st.pieces.push(pc);
+    }
+    // blocks of the abandoned town at random free spots in each base (different every match)
+    const rnd = mulberry32((seed || 1) * 31 + 7), S = 3.4;
+    const qb = {}; for (const k of ['NE', 'NW', 'SE', 'SW']) { const b = new THREE.Box3().setFromObject(TOWN_T.abandoned[k]); qb[k] = b; }
+    for (const team of [0, 1]) {
+      const B = BASES[team], keep = [];
+      const sp = SPAWN_PTS.map(([x, z]) => [teamX(team, x), z]);
+      const corridors = [
+        [-1500, -1000, RWY.z - 75, RWY.z + 75],      // runway and hangars side
+        [-1295, -1225, -250, 10],                     // taxiway
+        [-1190, -880, -45, 240],                      // tanks / jeeps / drones drive out this way
+        [-1245, -1150, 190, 470],                     // road down to the port
+      ].map(([a, b2, c, d]) => team ? [-b2, -a, c, d] : [a, b2, c, d]);
+      const order = ['NE', 'NW', 'SE', 'SW'].sort(() => rnd() - 0.5).concat(['NE', 'NW', 'SE', 'SW'].sort(() => rnd() - 0.5));   // up to two of each block
+      for (const k of order) {
+        const b = qb[k], cx = (b.min.x + b.max.x) / 2, cz = (b.min.z + b.max.z) / 2;
+        let placed = false;
+        for (let tries = 0; tries < 400 && !placed; tries++) {
+          const ry = Math.floor(rnd() * 4) * Math.PI / 2, odd = Math.round(ry / (Math.PI / 2)) % 2 === 1;
+          const hx = (odd ? b.max.z - b.min.z : b.max.x - b.min.x) / 2 * S, hz = (odd ? b.max.x - b.min.x : b.max.z - b.min.z) / 2 * S;
+          const r = Math.sqrt(rnd()) * (BASE_R + 40), a = rnd() * TAU, x = B.x + Math.cos(a) * r, z = B.z + Math.sin(a) * r;
+          const m = 10;
+          // whole footprint on the flat base ground
+          if ([[-1, -1], [1, -1], [-1, 1], [1, 1]].some(([u, w]) => Math.hypot(x + u * hx - B.x, z + w * hz - B.z) > BASE_R + 45)) continue;
+          if (Math.abs(x) > MAP_X - 150 || z > coastZ(x) - 80) continue;
+          const hit = (bx, bz, bhx, bhz) => Math.abs(x - bx) < hx + bhx + m && Math.abs(z - bz) < hz + bhz + m;
+          if (sp.some(([px, pz]) => hit(px, pz, 14, 14))) continue;
+          if (corridors.some(([a0, a1, c0, c1]) => hit((a0 + a1) / 2, (c0 + c1) / 2, (a1 - a0) / 2, (c1 - c0) / 2))) continue;
+          if (boxesIn(x - hx - m, z - hz - m, x + hx + m, z + hz + m).some(q => hit(q.x, q.z, q.hx, q.hz))) continue;
+          if (world.samSites.some(q => hit(q.x, q.z, 16, 16)) || keep.some(q => hit(q[0], q[1], q[2], q[3]))) continue;
+          keep.push([x, z, hx, hz]); placed = true;
+          const pc = placePiece(group, TOWN_T.abandoned[k], TOWN_T.abandoned_lo && TOWN_T.abandoned_lo[k], new THREE.Vector3(x, BASE_Y + 0.25, z), S, ry, cx, cz, 220);
+          addBoxes(xformBoxes(pieceBoxes(k, S, cx, cz), x, BASE_Y, z, ry)); st.pieces.push(pc);
+        }
+      }
+    }
+    if (typeof buildMinimapBase === 'function') buildMinimapBase();
+  };
+  if (TOWN_T.abandoned) build(); else whenModels(build);
+  return st;
+}
 
 // ═══════════ VEHICLE ENTITIES ═══════════
 function buildVis(type, team, n) {
@@ -1977,10 +2243,11 @@ function updateVis(v, dt) {
     v.wheelA += v.speed * dt / 0.37;
     for (const w of v.vis.wheels) w.rotation.x = v.wheelA * 0.37 / (w.userData.r || 0.37);
     for (const t of v.vis.tracks) t.offset.y -= v.speed * dt * 0.6;
+    if (v.vis.trk) for (const t of v.vis.trk) t.uOff.value = (v.wheelA * 0.37 * t.k) % t.L;
   } else if (v.type === 'jeep') {
     v.vis.turret.rotation.y = rel;
     v.vis.gun.rotation.x = -v.aimPitch;
-    v.wheelA += v.speed * dt / 0.44;
+    v.wheelA += v.speed * dt / (v.vis.model ? 0.54 : 0.44);
     for (const w of v.vis.wheels) w.rotation.x = v.wheelA;
   } else if (v.type === 'icbm') {
     v.vis.canister.rotation.x = -v.f2 * 1.5;
@@ -2206,7 +2473,13 @@ const bulletGeo = new THREE.CylinderGeometry(0.06, 0.06, 1, 4); bulletGeo.rotate
 const tracerMat = new THREE.MeshBasicMaterial({ color: 0xffd27a });
 const shellGeo = new THREE.SphereGeometry(0.22, 6, 4);
 const shellMat = new THREE.MeshBasicMaterial({ color: 0xffe0a0 });
-const rocketGeo = new THREE.CylinderGeometry(0.16, 0.16, 1.8, 6); rocketGeo.rotateX(Math.PI / 2);
+// a missile: body, nose cone and four tail fins (nose towards +z)
+const rocketGeo = (() => {
+  const parts = [new THREE.CylinderGeometry(0.15, 0.15, 2.4, 8), new THREE.ConeGeometry(0.15, 0.55, 8)];
+  parts[1].translate(0, 1.47, 0);
+  for (let k = 0; k < 4; k++) { const f = new THREE.BoxGeometry(0.03, 0.42, 0.34); f.translate(0, -0.95, 0.24); f.rotateY(k * Math.PI / 2); parts.push(f); }
+  const g = mergeGeometries(parts.map(p => p.toNonIndexed())); g.rotateX(Math.PI / 2); g.computeVertexNormals(); return g;
+})();
 const rocketMat = new THREE.MeshStandardMaterial({ color: 0xd8d6cc, roughness: .5 });
 const bombGeo = new THREE.CapsuleGeometry(0.28, 1.4, 3, 8); bombGeo.rotateX(Math.PI / 2);
 const bombMat = new THREE.MeshStandardMaterial({ color: 0x3d4630, roughness: .6 });
@@ -2230,7 +2503,10 @@ function spawnShot(k, o, vel, mine, ownerVid, extra = {}) {
   const mesh = new THREE.Mesh(sp.geo, sp.mat);
   if (sp.len) mesh.scale.z = sp.len;
   mesh.position.copy(o); scene.add(mesh);
-  shots.push(Object.assign({ k, pos: o.clone(), vel: vel.clone(), mine, ownerVid, age: 0, mesh, trailT: 0 }, extra));
+  const s = Object.assign({ k, pos: o.clone(), vel: vel.clone(), mine, ownerVid, age: 0, mesh, trailT: 0 }, extra);
+  // a jet's missile drops off the pylon first, then lights its motor and accelerates
+  if (k === 'rocket') { s.vmax = vel.length(); s.drop = 0.32; s.vel.setLength(Math.max(45, s.vmax * 0.36)); s.vel.y -= 4; }
+  shots.push(s);
 }
 function teamOfVid(vid) { const v = vehicles.get(vid); return v ? v.team : -1; }
 function hitVehicle(v, k, pt, scale = 1) {
@@ -2271,10 +2547,14 @@ function updateShots(dt) {
       continue;
     }
     // guided naval rockets: climb, then dive onto the target point
-    const tvv = s.tv ? vehicles.get(s.tv) : null;
+    if (s.drop > 0) {                          // falling free under the wing
+      s.drop -= dt; s.vel.y -= GRAV * dt;
+      if (s.drop <= 0) { particles.muzzle(s.pos, _v2.copy(s.vel).normalize().negate()); audio.at('shoot', s.pos, 0.7, 0.55, 900); }
+    } else if (s.vmax && s.vel.length() < s.vmax) s.vel.setLength(Math.min(s.vmax, s.vel.length() + 320 * dt));
+    const tvv = s.drop > 0 ? null : s.tv ? vehicles.get(s.tv) : null;
     if (tvv && tvv.alive && !(s.k === 'rocket' && s.age > 7)) { (s.target || (s.target = new THREE.Vector3())).copy(tvv.pos); s.target.y += tvv.type === 'ship' ? 4 : 1.2; }
     else if (s.tv) { s.tv = null; if (s.k === 'rocket') s.target = null; }
-    if (s.target) {
+    if (s.target && !(s.drop > 0)) {
       const want = _v1.copy(s.target).sub(s.pos);
       const dist = want.length();
       if (s.k === 'navrocket') { if (s.age < 0.9) want.set(s.vel.x, Math.abs(s.vel.length()), s.vel.z); else if (dist > 260) want.y += dist * 0.25; }
@@ -2282,9 +2562,9 @@ function updateShots(dt) {
       const dir = _v2.copy(s.vel).normalize();
       const ang = Math.acos(Math.max(-1, Math.min(1, dir.dot(want))));
       if (ang > 1e-4) dir.lerp(want, Math.min(1, 1.6 * dt / ang)).normalize();
-      const spd = Math.min(sp.speed * 1.5, s.vel.length() + 60 * dt);
+      const spd = Math.min(sp.speed * 1.5, s.vel.length() + (s.k === 'rocket' ? 320 : 60) * dt);
       s.vel.copy(dir).multiplyScalar(spd);
-    } else s.vel.y -= GRAV * sp.grav * dt;
+    } else if (!(s.drop > 0)) s.vel.y -= GRAV * sp.grav * dt;
     const step = s.vel.length() * dt;
     _o3[0] = s.pos.x; _o3[1] = s.pos.y; _o3[2] = s.pos.z;
     _d3[0] = s.vel.x / (step / dt); _d3[1] = s.vel.y / (step / dt); _d3[2] = s.vel.z / (step / dt);
@@ -2301,7 +2581,7 @@ function updateShots(dt) {
     }
     s.mesh.position.copy(s.pos);
     s.mesh.lookAt(_v1.copy(s.pos).add(s.vel));
-    if (sp.trail) { s.trailT -= dt; if (s.trailT <= 0) { s.trailT = 0.03; particles.mtrail(s.pos); particles.mflame(s.pos); } }
+    if (sp.trail && !(s.drop > 0)) { s.trailT -= dt; if (s.trailT <= 0) { s.trailT = 0.03; particles.mtrail(s.pos); particles.mflame(s.pos); } }
   }
 }
 socket.on('shot', (pid, s) => {
@@ -2535,14 +2815,23 @@ function ballisticElev(dist, dy, V, g) {
   if (root < 0) return 0.6;
   return Math.atan((v2 - Math.sqrt(root)) / (g * dist));
 }
+// ground under the four wheel corners → pitch and roll; restY then lifts the body so no corner is underground
 function groundFollow(v, x, z, len, wid) {
   const ch = Math.cos(v.h), sh = Math.sin(v.h);
-  const hf = H(x + sh * len, z + ch * len), hb = H(x - sh * len, z - ch * len);
-  const hl = H(x + ch * wid, z - sh * wid), hr = H(x - ch * wid, z + sh * wid);
-  return { y: Math.max(H(x, z), (hf + hb) / 2, (hl + hr) / 2), p: Math.atan2(hf - hb, len * 2), r: Math.atan2(hl - hr, wid * 2) };
+  const c = [[len, wid], [len, -wid], [-len, wid], [-len, -wid]].map(([f, l]) => H(x + sh * f + ch * l, z + ch * f - sh * l));
+  const hf = (c[0] + c[1]) / 2, hb = (c[2] + c[3]) / 2, hl = (c[0] + c[2]) / 2, hr = (c[1] + c[3]) / 2;
+  const gf = { c, len, wid, hc: H(x, z), p: Math.atan2(hf - hb, len * 2), r: Math.atan2(hl - hr, wid * 2) };
+  gf.y = restY(gf, gf.p, gf.r);
+  return gf;
+}
+function restY(gf, p, r) {
+  const tp = Math.tan(p), tr = Math.tan(r);
+  let y = gf.hc - 0.12;
+  [[gf.len, gf.wid], [gf.len, -gf.wid], [-gf.len, gf.wid], [-gf.len, -gf.wid]].forEach(([f, l], i) => { y = Math.max(y, gf.c[i] - f * tp - l * tr); });
+  return y;
 }
 function blocked(x, z, r, self) {
-  for (const b of world.boxes) if (Math.abs(x - b.x) < b.hx + r && Math.abs(z - b.z) < b.hz + r && b.y1 > H(x, z) + 0.5) return true;
+  for (const b of boxesIn(x - r, z - r, x + r, z + r)) if (Math.abs(x - b.x) < b.hx + r && Math.abs(z - b.z) < b.hz + r && b.y1 > H(x, z) + 0.5) return true;
   for (const o of vehicles.values()) {
     if (o === self || !o.vis.g.visible || o.type === 'plane' && o.air) continue;
     const rr = o.type === 'ship' ? 0 : o.type === 'tank' ? 3.2 : o.type === 'plane' ? 6 : o.type === 'gunner' ? 2 : o.type === 'drone' ? 0 : o.type === 'icbm' ? 6 : 2.4;
@@ -2565,8 +2854,9 @@ function driveGround(v, dt, frozen) {
   if (H(nx, nz) < -1.4) { v.speed = 0; warnText = 'ВОДА — ДАЛЬШЕ НЕ ПРОЕХАТЬ'; v.h = nh; }
   else if (blocked(nx, nz, r, v)) { v.speed *= -0.2; v.h = nh; }
   else { v.pos.x = nx; v.pos.z = nz; v.h = nh; }
-  const gf = groundFollow(v, v.pos.x, v.pos.z, tank ? 3 : 1.6, tank ? 1.6 : 1);
-  v.pos.y = gf.y; v.p += (gf.p - v.p) * Math.min(1, dt * 8); v.r += (gf.r - v.r) * Math.min(1, dt * 8);
+  const gf = groundFollow(v, v.pos.x, v.pos.z, tank ? 3.3 : 1.45, tank ? 1.45 : 1.1);
+  v.p += (gf.p - v.p) * Math.min(1, dt * 8); v.r += (gf.r - v.r) * Math.min(1, dt * 8);
+  v.pos.y = restY(gf, v.p, v.r);              // with the tilt actually shown, so the wheels never dip into the ground
   if (Math.abs(gf.p) > 0.6) v.speed *= Math.exp(-3 * dt);
   // turret: turn towards the aim point; gun elevates to land the shell there
   const tp = _v3.set(v.pos.x, v.pos.y + (tank ? 2.4 : 2.3), v.pos.z);
@@ -2672,7 +2962,7 @@ function drivePlane(v, dt, frozen) {
     if (agl < 70 && v.speed < 85 && v.p > -0.2) warnText = 'ПОСАДКА: РОВНО И МЕДЛЕННО · S — ТОРМОЗ';
     // buildings
     let hitObj = false;
-    if (v.pos.y < 80) for (const b of world.boxes) if (Math.abs(v.pos.x - b.x) < b.hx + 2 && Math.abs(v.pos.z - b.z) < b.hz + 2 && v.pos.y < b.y1) { hitObj = true; break; }
+    if (v.pos.y < 80) for (const b of boxesIn(v.pos.x - 2, v.pos.z - 2, v.pos.x + 2, v.pos.z + 2)) if (Math.abs(v.pos.x - b.x) < b.hx + 2 && Math.abs(v.pos.z - b.z) < b.hz + 2 && v.pos.y < b.y1) { hitObj = true; break; }
     if (hitObj) return crashMine(v, 'crash');
     // touching down
     if (agl < 1.9) {
@@ -2723,16 +3013,15 @@ function drivePlane(v, dt, frozen) {
   lockBeep -= dt;
   if (lockVid && lockBeep <= 0 && v.rk > 0) { audio.tone(lockedOn ? 1250 : 760, lockedOn ? 0.12 : 0.05, 0.035); lockBeep = lockedOn ? 0.16 : 0.32; }
   if (mouseAlt && reload2 <= 0 && v.rk > 0 && !chatOpen && !frozen) {
-    reload2 = 0.5;
+    // one missile per press (hold to ripple them off), alternating left and right pylons
+    reload2 = 0.4;
     v.vis.g.updateMatrixWorld(true);
-    for (const sx of [-1, 1]) {
-      if (v.rk <= 0) break;
-      v.rk--;
-      const o = _v2.set(sx * 4, -1, 1).applyMatrix4(v.vis.g.matrixWorld).clone();
-      const dir = fwd(v.h, v.p, new THREE.Vector3());
-      fireShot('rocket', o, dir, { inherit: dir.clone().multiplyScalar(v.speed * 0.6), tv: lockedOn ? lockVid : null });
-    }
-    audio.whoosh(0.8); audio.play('shoot', 0.6, 0, 0.6);
+    v.rkSide = -(v.rkSide || 1);
+    v.rk--;
+    const o = _v2.set(v.rkSide * 3.3, -1.25, 0.6).applyMatrix4(v.vis.g.matrixWorld).clone();
+    const dir = fwd(v.h, v.p, new THREE.Vector3());
+    fireShot('rocket', o, dir, { inherit: dir.clone().multiplyScalar(v.speed * 0.6), tv: lockedOn ? lockVid : null });
+    audio.play('shoot', 0.35, 0, 0.5);
     logMsg(lockedOn ? 'Ракеты с наведением: <b style="color:#ff7a68">' + vName(vehicles.get(lockVid)) + '</b>' : 'Ракеты без захвата — летят прямо');
   }
   bombCd = Math.max(0, bombCd - dt);
@@ -2804,8 +3093,9 @@ function driveIcbm(v, dt, frozen) {
     for (const off of [8, 0, -8]) if (blocked(nx + Math.sin(nh) * off, nz + Math.cos(nh) * off, 2.2, v)) bad = true;
     if (bad) v.speed *= -0.2; else { v.pos.x = nx; v.pos.z = nz; v.h = nh; }
   }
-  const gf = groundFollow(v, v.pos.x, v.pos.z, 8, 1.6);
-  v.pos.y = gf.y; v.p += (gf.p - v.p) * Math.min(1, dt * 5); v.r += (gf.r - v.r) * Math.min(1, dt * 5);
+  const gf = groundFollow(v, v.pos.x, v.pos.z, 9, 1.7);
+  v.p += (gf.p - v.p) * Math.min(1, dt * 5); v.r += (gf.r - v.r) * Math.min(1, dt * 5);
+  v.pos.y = restY(gf, v.p, v.r);
   // right-click / Q: raise the missile and open the targeting view
   if (mouseAlt && !v.altPrev) {
     if (!v.tmode && Math.abs(v.speed) > 1) logMsg('Сначала остановитесь');
@@ -2899,7 +3189,7 @@ function driveShip(v, dt, frozen) {
     for (const off of [22, 0, -22]) if (H(nx + Math.sin(nh) * off, nz + Math.cos(nh) * off) > -3.5) ok = false;
     for (const o of vehicles.values()) if (o !== v && o.type === 'ship' && o.vis.g.visible && Math.hypot(nx - o.pos.x, nz - o.pos.z) < 26) ok = false;
     if (Math.abs(nx) > MAP_X || nz > MAP_Z) ok = false;
-    for (const b of world.boxes) if (b.y0 < 0 && Math.abs(nx - b.x) < b.hx + 5 && Math.abs(nz - b.z) < b.hz + 5) ok = false;
+    for (const b of boxesIn(nx - 5, nz - 5, nx + 5, nz + 5)) if (b.y0 < 0 && Math.abs(nx - b.x) < b.hx + 5 && Math.abs(nz - b.z) < b.hz + 5) ok = false;
     if (ok) { v.pos.x = nx; v.pos.z = nz; v.h = nh; }
     else { v.speed *= Math.exp(-4 * dt); v.h = nh; warnText = 'МЕЛЬ / ПРЕПЯТСТВИЕ'; }
   }
@@ -3266,7 +3556,7 @@ function drawCmdHud(c, w, h, now) {
   for (const v of vehicles.values()) {
     if (!v.alive || !v.vis.g.visible) continue;
     const mine = v.team === team;
-    if (!mine && !v.seen) continue;
+    if (!mine) continue;                    // the commander sees only his own side
     const p = project(_v1.copy(v.pos).setY(v.pos.y + (v.type === 'ship' ? 14 : 4)));
     if (!p) continue;
     const hov = cmdHover === v;
@@ -3303,14 +3593,21 @@ function updateSpotting(dt) {
   }
   for (const s of world.samSites) if (s.team === team) for (const e of vehicles.values()) if (e.team !== team && e.alive && s.top.distanceTo(e.pos) < SAM_RANGE) e.seen = true;
 }
+// enemies: only a jet's sensors show them (spotted by the team); everything else has to actually see them,
+// and an enemy's name and health appear only while it is under the crosshair
+let aimedVid = null, aimedT = 0;
+const heatView = () => { const v = myVehicle(); return !!v && v.type === 'plane'; };
 function updateMarkers() {
-  const v = myVehicle();
+  const v = myVehicle(), heat = heatView(), now = performance.now();
+  if (aimHit && aimHit.kind === 'veh' && aimHit.v.alive && aimHit.v.team !== myTeam()) { aimedVid = aimHit.v.vid; aimedT = now; }
+  else if (now - aimedT > 180) aimedVid = null;
   for (const o of vehicles.values()) {
     const mk = o.marker;
-    if (!inGame || mode !== 'drive' || o === v || !o.alive || !o.vis.g.visible || !o.seen) { mk.style.display = 'none'; continue; }
+    if (!inGame || mode !== 'drive' || o === v || !o.alive || !o.vis.g.visible) { mk.style.display = 'none'; continue; }
     const enemy = o.team !== myTeam();
+    if (enemy && !(heat ? o.seen : o.vid === aimedVid)) { mk.style.display = 'none'; continue; }
     const dist = v ? o.pos.distanceTo(v.pos) : 0;
-    if (dist > (enemy ? 900 : 1400)) { mk.style.display = 'none'; continue; }
+    if (dist > (enemy ? (heat ? 900 : 2600) : 1400)) { mk.style.display = 'none'; continue; }
     const p = project(_v1.copy(o.pos).setY(o.pos.y + (o.type === 'ship' ? 18 : o.type === 'plane' ? 5 : 4.5)));
     if (!p) { mk.style.display = 'none'; continue; }
     mk.style.display = 'block'; mk.className = 'mk ' + (enemy ? 'en' : 'al');
@@ -3360,6 +3657,10 @@ function buildMinimapBase() {
     img.data[i + 3] = 255;
   }
   c.putImageData(img, 0, 0);
+  if (world) {                                                    // buildings and towns
+    c.fillStyle = 'rgba(58,56,50,.8)';
+    for (const b of world.boxes) { const [x0, y0] = mmP(b.x - b.hx, b.z - b.hz), [x1, y1] = mmP(b.x + b.hx, b.z + b.hz); c.fillRect(x0, y0, Math.max(1, x1 - x0), Math.max(1, y1 - y0)); }
+  }
   for (const team of [0, 1]) {
     const [bx, by] = mmP(BASES[team].x, BASES[team].z);
     c.strokeStyle = TEAM_CSS[team]; c.lineWidth = 2; c.beginPath(); c.arc(bx, by, BASE_R / (2 * MMX) * MMW, 0, TAU); c.stroke();
@@ -3374,7 +3675,7 @@ function drawMinimap() {
   for (const s of world.samSites) { const [x, y] = mmP(s.x, s.z); c.fillStyle = TEAM_CSS[s.team]; c.beginPath(); c.moveTo(x, y - 6); c.lineTo(x + 5, y + 4); c.lineTo(x - 5, y + 4); c.closePath(); c.fill(); }
   for (const v of vehicles.values()) {
     if (!v.alive || !v.vis.g.visible) continue;
-    if (v.team !== team && !v.seen) continue;
+    if (v.team !== team && !(v.seen && heatView())) continue;
     const [x, y] = mmP(v.pos.x, v.pos.z);
     c.save(); c.translate(x, y); c.rotate(-v.h + Math.PI);
     c.fillStyle = v.vid === myVid ? '#fff' : v.team === team ? (v.team ? '#8fb8e0' : '#c2d27a') : '#ff5a46';
