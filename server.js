@@ -11,24 +11,35 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' }, pingInterval: 10000, pingTimeout: 30000 });
 
+// models, textures and sounds are cached by the browser (the game asks for them with a version number)
+app.use('/models', express.static(path.join(__dirname, 'public/models'), { maxAge: '30d', immutable: true }));
+app.use('/audio', express.static(path.join(__dirname, 'public/audio'), { maxAge: '30d' }));
 app.use(express.static(path.join(__dirname, 'public')));
-app.use('/vendor/three', express.static(path.join(__dirname, 'node_modules/three/build')));
-app.use('/vendor/three-addons', express.static(path.join(__dirname, 'node_modules/three/examples/jsm')));
+app.use('/vendor/three', express.static(path.join(__dirname, 'node_modules/three/build'), { maxAge: '7d' }));
+app.use('/vendor/three-addons', express.static(path.join(__dirname, 'node_modules/three/examples/jsm'), { maxAge: '7d' }));
 
 const PORT = process.env.PORT || 3000;
 
 // ── game constants (keep in sync with client) ──
 const MAX_PLAYERS = 16;
 const MATCH_TIME = 60 * 60;      // safety cap, seconds; normally a match ends when one side has no machines left
-const HP = { tank: 120, jeep: 50, plane: 70, ship: 260, gunner: 40, icbm: 90, drone: 8 };
-const MACHINES = 11;             // per team; machine-gun posts don't count
+const HP = { tank: 120, jeep: 50, plane: 70, ship: 260, gunner: 40, icbm: 90, drone: 8, soldier: 30 };
+const MACHINES = 12;             // per team; machine-gun posts, drones and foot soldiers don't count
+const NOT_MACHINE = new Set(['gunner', 'drone', 'soldier']);
+const PFX = { soldier: 'a' };     // vid prefix (ship already uses 's')
+// repair hangar per base (team 0; team 1 mirrored in x): one machine at a time, 60 s, can be destroyed
+const HANGAR = { x: -1195, z: -75, hx: 18, hz: 15, hp: 300 };
+const REPAIR_T = 60;
+const REPAIRABLE = new Set(['tank', 'jeep', 'plane']);
 // base layout for team 0 (west); team 1 is mirrored in x
 const LAYOUT = [
   ['tank', -1110, -10, Math.PI / 2], ['tank', -1110, 25, Math.PI / 2], ['tank', -1110, 60, Math.PI / 2],
+  ['tank', -1070, 5, Math.PI / 2], ['tank', -1070, 45, Math.PI / 2],
   ['jeep', -1170, 150, Math.PI / 2], ['jeep', -1150, 165, Math.PI / 2], ['jeep', -1130, 180, Math.PI / 2],
   ['plane', -1430, -262, Math.PI / 2], ['plane', -1395, -238, Math.PI / 2],
   ['ship', -1260, 560, 0.25], ['ship', -1150, 590, 0.25],
-  ['icbm', -1265, 110, Math.PI / 2], ['drone', -1185, 14, Math.PI / 2], ['drone', -1185, 22, Math.PI / 2],
+  ['drone', -1185, 14, Math.PI / 2], ['drone', -1185, 22, Math.PI / 2],
+  ['soldier', -1235, 75, Math.PI / 2], ['soldier', -1235, 90, Math.PI / 2],
   ['gunner', -985, 40, Math.PI / 2], ['gunner', -1010, 215, Math.PI / 2], ['gunner', -1150, 405, 0],
 ];
 
@@ -50,7 +61,7 @@ function makeVehicles() {
     for (const [type, x, z, yaw] of LAYOUT) {
       count[type] = (count[type] || 0) + 1;
       const sp = team === 0 ? { x, z, yaw } : { x: -x, z, yaw: -yaw };
-      vs.push({ vid: `${team}${type[0]}${count[type]}`, team, type, n: count[type], hp: HP[type], max: HP[type], alive: true, driver: null, ammo: type === 'icbm' ? 2 : 0, spent: false, spawn: sp, st: null, respawnAt: 0, lastHitBy: null, lastHitAt: 0 });
+      vs.push({ vid: `${team}${PFX[type] || type[0]}${count[type]}`, team, type, n: count[type], hp: HP[type], max: HP[type], alive: true, driver: null, ammo: type === 'icbm' ? 2 : 0, spent: false, spawn: sp, st: null, respawnAt: 0, lastHitBy: null, lastHitAt: 0 });
     }
   }
   return vs;
@@ -60,10 +71,35 @@ function publicRoom(r) {
     code: r.code, hostId: r.hostId, state: r.state, mode: 'team', seed: r.seed, tickets: r.tickets,
     timeLeft: r.endsAt && r.state === 'playing' ? Math.max(0, r.endsAt - Date.now()) : null,
     players: [...r.players.values()].map(p => ({ id: p.id, name: p.name, team: p.team, vid: p.vid, kills: p.kills, deaths: p.deaths, dmg: p.dmg })),
-    vehicles: r.vehicles.map(v => ({ vid: v.vid, team: v.team, type: v.type, n: v.n, hp: v.hp, max: v.max, alive: v.alive, ammo: v.ammo, spent: v.spent, driver: v.driver, spawn: v.spawn, st: v.st, }))
+    vehicles: r.vehicles.map(v => ({ vid: v.vid, team: v.team, type: v.type, n: v.n, hp: v.hp, max: v.max, alive: v.alive, ammo: v.ammo, spent: v.spent, driver: v.driver, spawn: v.spawn, st: v.st, })),
+    hangars: (r.hangars || []).map(h => ({ team: h.team, hp: h.hp, max: h.max, busy: h.busy, prog: h.prog })),
   };
 }
-function countMachines(r) { r.tickets = [0, 1].map(t => r.vehicles.filter(v => v.team === t && v.alive && !v.spent && v.type !== 'gunner' && v.type !== 'drone').length); }
+function countMachines(r) { r.tickets = [0, 1].map(t => r.vehicles.filter(v => v.team === t && v.alive && !v.spent && !NOT_MACHINE.has(v.type)).length); }
+function makeHangars() { return [0, 1].map(team => ({ team, x: team ? -HANGAR.x : HANGAR.x, z: HANGAR.z, hx: HANGAR.hx, hz: HANGAR.hz, hp: HANGAR.hp, max: HANGAR.hp, busy: null, prog: 0, from: 0, t0: 0 })); }
+const hangarState = h => ({ team: h.team, hp: h.hp, max: h.max, busy: h.busy, prog: h.prog });
+// once a second: the hangar takes the machine that has been parked inside longest and repairs it over 60 s
+function hangarTick(r) {
+  const now = Date.now();
+  for (const h of r.hangars || []) {
+    if (h.hp <= 0) continue;
+    const inside = v => v.team === h.team && v.alive && REPAIRABLE.has(v.type) && v.st && Math.abs(v.st[0] - h.x) < h.hx - 1 && Math.abs(v.st[2] - h.z) < h.hz - 1 && Math.abs(v.st[6] || 0) < 1.5;
+    for (const v of r.vehicles) { if (inside(v)) v.inHangar = v.inHangar || now; else v.inHangar = 0; }
+    let cur = h.busy && r.vehicles.find(v => v.vid === h.busy);
+    if (cur && !cur.inHangar) { io.to(r.code).emit('repair', { vid: cur.vid, state: 'left', prog: h.prog }); cur = null; h.busy = null; h.prog = 0; io.to(r.code).emit('hangar', hangarState(h)); }
+    if (!cur) {
+      const next = r.vehicles.filter(v => v.inHangar && v.hp < v.max).sort((a, b) => a.inHangar - b.inHangar)[0];
+      if (!next) continue;
+      cur = next; h.busy = next.vid; h.from = next.hp; h.t0 = now; h.prog = 0;
+      io.to(r.code).emit('repair', { vid: next.vid, state: 'start', prog: 0 });
+    }
+    h.prog = Math.min(1, (now - h.t0) / 1000 / REPAIR_T);
+    cur.hp = Math.round(h.from + (cur.max - h.from) * h.prog);
+    io.to(r.code).emit('heal', { vid: cur.vid, hp: cur.hp, prog: h.prog });
+    if (h.prog >= 1) { cur.hp = cur.max; io.to(r.code).emit('repair', { vid: cur.vid, state: 'done', prog: 1 }); h.busy = null; h.prog = 0; }
+    io.to(r.code).emit('hangar', hangarState(h));
+  }
+}
 function broadcastRoom(r) { io.to(r.code).emit('room', publicRoom(r)); }
 function teamCount(r, t) { let n = 0; for (const p of r.players.values()) if (p.team === t) n++; return n; }
 function rebalance(r) {
@@ -80,6 +116,7 @@ function startMatch(r) {
   r.seed = Math.floor(Math.random() * 1e9);
   r.tickets = [MACHINES, MACHINES];
   r.vehicles = makeVehicles();
+  r.hangars = makeHangars();
   for (const p of r.players.values()) { p.kills = 0; p.deaths = 0; p.dmg = 0; p.vid = null; }
   r.endsAt = Date.now() + 3000 + MATCH_TIME * 1000;
   r.startAt = Date.now() + 3000;
@@ -91,6 +128,7 @@ function tick(r) {
   if (r.state !== 'playing') return;
   const now = Date.now();
   if (now >= r.endsAt) endMatch(r);
+  hangarTick(r);
 }
 function endMatch(r) {
   if (r.state !== 'playing') return;
@@ -140,7 +178,7 @@ io.on('connection', socket => {
   socket.on('create', (d, cb) => {
     if (room) return cb && cb({ ok: false, err: 'Вы уже в комнате' });
     const code = newCode();
-    const r = { code, hostId: socket.id, players: new Map(), state: 'lobby', seed: Math.floor(Math.random() * 1e9), tickets: [MACHINES, MACHINES], vehicles: makeVehicles(), endsAt: null };
+    const r = { code, hostId: socket.id, players: new Map(), state: 'lobby', seed: Math.floor(Math.random() * 1e9), tickets: [MACHINES, MACHINES], vehicles: makeVehicles(), hangars: makeHangars(), endsAt: null };
     rooms.set(code, r);
     attach(r, d && d.name);
     cb && cb({ ok: true, code, id: socket.id });
@@ -214,6 +252,21 @@ io.on('connection', socket => {
     const dmg = Math.max(1, Math.min(h.k === 'icbm' ? 300 : 95, Math.round(Number(h.dmg) || 0)));
     const pt = Array.isArray(h.pt) ? h.pt.slice(0, 3).map(Number) : null;
     damage(room, v, dmg, p.id, pt, String(h.k || '').slice(0, 8));
+  });
+  // an enemy repair hangar hit by a shell, rocket, bomb or drone
+  socket.on('hhit', h => {
+    if (!room || room.state !== 'playing' || !h) return;
+    const p = me(), hg = (room.hangars || [])[h.team ? 1 : 0];
+    if (!p || !hg || hg.team === p.team || hg.hp <= 0 || Date.now() < room.startAt) return;
+    const now = Date.now();
+    p.hh = (p.hh || []).filter(t => now - t < 1000); if (p.hh.length >= 10) return; p.hh.push(now);
+    hg.hp = Math.max(0, hg.hp - Math.max(1, Math.min(120, Math.round(Number(h.dmg) || 0))));
+    if (hg.hp <= 0) {
+      const cur = hg.busy; hg.busy = null; hg.prog = 0;
+      if (cur) io.to(room.code).emit('repair', { vid: cur, state: 'lost', prog: 0 });
+      io.to(room.code).emit('hangarDown', { team: hg.team, by: p.id });
+    }
+    io.to(room.code).emit('hangar', hangarState(hg));
   });
   // own vehicle hit by an enemy SAM (simulated on the victim's client)
   socket.on('samhit', () => {
