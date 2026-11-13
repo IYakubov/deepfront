@@ -23,14 +23,14 @@ const PORT = process.env.PORT || 3000;
 // ── game constants (keep in sync with client) ──
 const MAX_PLAYERS = 16;
 const MATCH_TIME = 60 * 60;      // safety cap, seconds; normally a match ends when one side has no machines left
-const HP = { tank: 120, jeep: 50, plane: 70, ship: 260, gunner: 40, icbm: 90, drone: 8, soldier: 30 };
-const MACHINES = 12;             // per team; machine-gun posts, drones and foot soldiers don't count
+const HP = { tank: 120, jeep: 50, plane: 70, ship: 260, gunner: 40, icbm: 90, drone: 8, soldier: 30, moto: 35 };
+const MACHINES = 14;             // per team; machine-gun posts, drones and foot soldiers don't count
 const NOT_MACHINE = new Set(['gunner', 'drone', 'soldier']);
 const PFX = { soldier: 'a' };     // vid prefix (ship already uses 's')
 // repair hangar per base (team 0; team 1 mirrored in x): one machine at a time, 60 s, can be destroyed
 const HANGAR = { x: -1195, z: -75, hx: 18, hz: 15, hp: 300 };
 const REPAIR_T = 60;
-const REPAIRABLE = new Set(['tank', 'jeep', 'plane']);
+const REPAIRABLE = new Set(['tank', 'jeep', 'plane', 'moto']);
 // base layout for team 0 (west); team 1 is mirrored in x
 const LAYOUT = [
   ['tank', -1110, -10, Math.PI / 2], ['tank', -1110, 25, Math.PI / 2], ['tank', -1110, 60, Math.PI / 2],
@@ -39,7 +39,7 @@ const LAYOUT = [
   ['plane', -1430, -262, Math.PI / 2], ['plane', -1395, -238, Math.PI / 2],
   ['ship', -1260, 560, 0.25], ['ship', -1150, 590, 0.25],
   ['drone', -1185, 14, Math.PI / 2], ['drone', -1185, 22, Math.PI / 2],
-  ['soldier', -1235, 75, Math.PI / 2], ['soldier', -1235, 90, Math.PI / 2],
+  ['moto', -1235, 75, Math.PI / 2], ['moto', -1235, 90, Math.PI / 2],
   ['gunner', -985, 40, Math.PI / 2], ['gunner', -1010, 215, Math.PI / 2], ['gunner', -1150, 405, 0],
 ];
 
@@ -71,7 +71,7 @@ function publicRoom(r) {
     code: r.code, hostId: r.hostId, state: r.state, mode: 'team', seed: r.seed, tickets: r.tickets,
     timeLeft: r.endsAt && r.state === 'playing' ? Math.max(0, r.endsAt - Date.now()) : null,
     players: [...r.players.values()].map(p => ({ id: p.id, name: p.name, team: p.team, vid: p.vid, kills: p.kills, deaths: p.deaths, dmg: p.dmg })),
-    vehicles: r.vehicles.map(v => ({ vid: v.vid, team: v.team, type: v.type, n: v.n, hp: v.hp, max: v.max, alive: v.alive, ammo: v.ammo, spent: v.spent, driver: v.driver, spawn: v.spawn, st: v.st, })),
+    vehicles: r.vehicles.map(v => ({ vid: v.vid, team: v.team, type: v.type, n: v.n, hp: v.hp, max: v.max, alive: v.alive, ammo: v.ammo, spent: v.spent, driver: v.driver, gunner: v.gunner || null, spawn: v.spawn, st: v.st, })),
     hangars: (r.hangars || []).map(h => ({ team: h.team, hp: h.hp, max: h.max, busy: h.busy, prog: h.prog })),
   };
 }
@@ -144,12 +144,14 @@ function destroyVehicle(r, v, by, how) {
   countMachines(r);
   const driver = v.driver && r.players.get(v.driver);
   if (driver) { driver.deaths++; driver.vid = null; }
+  const gunner = v.gunner && r.players.get(v.gunner);
+  if (gunner) { gunner.deaths++; gunner.vid = null; }
   // credit: the shooter, or whoever hit it last in the past 15 s
   let killer = by && r.players.get(by);
   if ((!killer || killer.team === v.team) && v.lastHitBy && Date.now() - v.lastHitAt < 15000) killer = r.players.get(v.lastHitBy);
   if (killer && killer.team !== v.team) killer.kills++;
-  io.to(r.code).emit('vdead', { vid: v.vid, by: killer ? killer.id : null, driver: v.driver, how: how || '' });
-  v.driver = null;
+  io.to(r.code).emit('vdead', { vid: v.vid, by: killer ? killer.id : null, driver: v.driver, gunner: v.gunner || null, how: how || '' });
+  v.driver = null; v.gunner = null;
   broadcastRoom(r);
   if (r.tickets[v.team] <= 0) setTimeout(() => endMatch(r), 1500);
 }
@@ -167,6 +169,8 @@ io.on('connection', socket => {
   let room = null;
   const me = () => room && room.players.get(socket.id);
   const myVehicle = () => { const p = me(); return p && p.vid ? room.vehicles.find(v => v.vid === p.vid) : null; };
+  // free my seat (driver's, or the gunner's seat of a motorcycle)
+  const leaveSeat = v => { if (!v) return; if (v.gunner === socket.id) { v.gunner = null; v.gst = null; } if (v.driver === socket.id) v.driver = null; };
 
   function attach(r, name) {
     room = r;
@@ -220,25 +224,40 @@ io.on('connection', socket => {
     if (!p || !room || room.state !== 'playing') return cb && cb({ ok: false });
     const v = room.vehicles.find(x => x.vid === vid);
     if (!v || !v.alive || v.team !== p.team) return cb && cb({ ok: false, err: 'Недоступно' });
-    if (v.driver && v.driver !== p.id) return cb && cb({ ok: false, err: 'Занято' });
-    const old = myVehicle(); if (old && old !== v) old.driver = null;
-    v.driver = p.id; p.vid = v.vid;
-    cb && cb({ ok: true, st: v.st });
+    let seat = 0;
+    if (v.driver && v.driver !== p.id) {
+      // a motorcycle has a second seat: the machine-gunner in the sidecar
+      if (v.type !== 'moto' || (v.gunner && v.gunner !== p.id)) return cb && cb({ ok: false, err: 'Занято' });
+      seat = 1;
+    }
+    const old = myVehicle(); if (old && old !== v) leaveSeat(old);
+    if (seat) v.gunner = p.id; else { if (v.gunner === p.id) { v.gunner = null; v.gst = null; } v.driver = p.id; }
+    p.vid = v.vid;
+    cb && cb({ ok: true, st: v.st, seat });
     broadcastRoom(room);
   });
   socket.on('exit', () => {
     const p = me(), v = myVehicle();
     if (!p) return;
-    if (v) v.driver = null;
+    leaveSeat(v);
     p.vid = null;
     broadcastRoom(room);
   });
   // own vehicle state: stored (for empty vehicles / late joiners) and relayed
   socket.on('st', s => {
     const v = myVehicle();
-    if (!v || !v.alive || !Array.isArray(s)) return;
+    if (!v || !v.alive || !Array.isArray(s) || v.driver !== socket.id) return;
     v.st = s.slice(0, 13);
+    if (v.gunner && v.gst) { v.st[7] = v.gst[0]; v.st[8] = v.gst[1]; v.st[9] = v.gst[2]; }   // the gunner aims and fires
     socket.to(room.code).volatile.emit('st', v.vid, v.st);
+  });
+  // motorcycle gunner: where the machine gun points and whether it fires
+  socket.on('gst', s => {
+    const v = myVehicle();
+    if (!v || !v.alive || v.gunner !== socket.id || !Array.isArray(s)) return;
+    v.gst = [Number(s[0]) || 0, Number(s[1]) || 0, s[2] ? 1 : 0];
+    if (v.st) { v.st[7] = v.gst[0]; v.st[8] = v.gst[1]; v.st[9] = v.gst[2]; }
+    socket.to(room.code).volatile.emit('gst', v.vid, v.gst);
   });
   // shooter reports a hit; server owns hp
   socket.on('hit', h => {
@@ -278,7 +297,7 @@ io.on('connection', socket => {
   // crashed / sank / abandoned in the air
   socket.on('crash', how => {
     const v = myVehicle();
-    if (!v || !room) return;
+    if (!v || !room || v.driver !== socket.id) return;
     destroyVehicle(room, v, null, String(how || 'crash').slice(0, 10));
   });
   // visuals of shots for everyone else
@@ -312,7 +331,7 @@ io.on('connection', socket => {
   socket.on('disconnect', () => {
     if (!room) return;
     const r = room, p = me();
-    const v = myVehicle(); if (v) v.driver = null;
+    leaveSeat(myVehicle());
     r.players.delete(socket.id);
     if (r.players.size === 0) { clearInterval(r.tick); rooms.delete(r.code); return; }
     if (r.hostId === socket.id) r.hostId = r.players.keys().next().value;
