@@ -1473,9 +1473,16 @@ function splitMesh(mesh, keyOf) {
   }
   const out = {};
   for (const [k, list] of buckets) {
+    // keep only the vertices this part uses, so its bounding box (and the pivot made from it) is its own
+    const remap = new Map(), order = [];
+    const idx2 = list.map(i => { let j = remap.get(i); if (j === undefined) { j = order.length; remap.set(i, j); order.push(i); } return j; });
     const g2 = new THREE.BufferGeometry();
-    for (const nm in geo.attributes) g2.setAttribute(nm, geo.attributes[nm]);
-    g2.setIndex(list);
+    for (const nm in geo.attributes) {
+      const a = geo.attributes[nm], sz = a.itemSize, arr = new Float32Array(order.length * sz);   // decoded floats (sources are often packed integers)
+      order.forEach((vi, k) => { for (let c = 0; c < sz; c++) arr[k * sz + c] = a.getComponent(vi, c); });
+      g2.setAttribute(nm, new THREE.BufferAttribute(arr, sz));
+    }
+    g2.setIndex(idx2);
     const m = new THREE.Mesh(g2, mesh.material);
     m.position.copy(mesh.position); m.quaternion.copy(mesh.quaternion); m.scale.copy(mesh.scale); m.name = mesh.name + '_' + k;
     m.castShadow = mesh.castShadow; m.receiveShadow = mesh.receiveShadow;
