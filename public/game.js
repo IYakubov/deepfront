@@ -159,7 +159,7 @@ const audio = (() => {
     master.connect(comp); comp.connect(ctx.destination);
     noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
     const nd = noiseBuf.getChannelData(0); for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
-    ['shoot', 'hit', 'ricochet', 'energy', 'victory', 'missile_alert', 'explosion', 'tank_shot_1', 'tank_shot_2', 'tank_shot_3'].forEach(load);
+    ['shoot', 'hit', 'ricochet', 'energy', 'victory', 'missile_alert', 'explosion', 'tank_shot_1', 'tank_shot_2', 'tank_shot_3', 'engine'].forEach(load);
     // electric motor + propeller hum
     engOsc = ctx.createOscillator(); engOsc.type = 'sawtooth'; engOsc.frequency.value = 50;
     engOsc2 = ctx.createOscillator(); engOsc2.type = 'triangle'; engOsc2.frequency.value = 25;
@@ -197,17 +197,31 @@ const audio = (() => {
     const att = Math.max(0, 1 - d / range) ** 1.4;
     play(name, vol * att, pan * 0.8, rate);
   }
-  const ENG = { tank: [32, 60, 260, 520], jeep: [55, 140, 400, 1300], plane: [70, 190, 700, 2600], ship: [24, 34, 160, 300] };
+  // recorded engine loop for ground vehicles: [pitch at idle, pitch flat out, volume]
+  const ENG_S = { tank: [0.55, 0.95, 1.0], jeep: [0.8, 1.45, 0.8], moto: [1.1, 1.9, 0.7] };
+  let engSrc = null, engSG = null;
+  const ENG = { tank: [32, 60, 260, 520], drone: [55, 140, 400, 1300], jeep: [55, 140, 400, 1300], plane: [70, 190, 700, 2600], ship: [24, 34, 160, 300] };
   function engine(kind, load, speed) {
     if (!ctx) return;
     const t = ctx.currentTime, on = muted ? 0 : 1, e = ENG[kind] || ENG.tank;
+    const sm = ENG_S[kind];
+    if (sm && buffers.engine) {
+      // the file is 0.3 s lead-in + an 8 s seamless loop + 0.5 s tail
+      if (!engSrc) { engSrc = ctx.createBufferSource(); engSrc.buffer = buffers.engine; engSrc.loop = true; engSrc.loopStart = 0.35; engSrc.loopEnd = 8.35; engSG = ctx.createGain(); engSG.gain.value = 0; engSrc.connect(engSG); engSG.connect(master); engSrc.start(0, 0.35); }
+      const k = Math.min(1, Math.max(speed, load * 0.35));
+      engSrc.playbackRate.setTargetAtTime(sm[0] + (sm[1] - sm[0]) * k, t, 0.35);
+      engSG.gain.setTargetAtTime(on * sm[2] * (0.16 + load * 0.1 + Math.min(1, speed) * 0.08), t, 0.25);
+      engGain.gain.setTargetAtTime(0, t, 0.2); amb.gain.setTargetAtTime(on * 0.008, t, 0.5);
+      return;
+    }
+    if (engSG) engSG.gain.setTargetAtTime(0, t, 0.25);
     engGain.gain.setTargetAtTime(on * (0.025 + load * 0.03 + speed * 0.025), t, 0.25);
     engOsc.frequency.setTargetAtTime(e[0] + (e[1] - e[0]) * Math.max(load, speed), t, 0.3);
     engOsc2.frequency.setTargetAtTime((e[0] + (e[1] - e[0]) * Math.max(load, speed)) * 0.5, t, 0.3);
     engFilter.frequency.setTargetAtTime(e[2] + (e[3] - e[2]) * speed, t, 0.3);
     amb.gain.setTargetAtTime(on * 0.008, t, 0.5);
   }
-  function engineOff() { if (ctx) { engGain.gain.setTargetAtTime(0, ctx.currentTime, 0.3); amb.gain.setTargetAtTime(0, ctx.currentTime, 0.5); } }
+  function engineOff() { if (ctx) { if (engSG) engSG.gain.setTargetAtTime(0, ctx.currentTime, 0.3); engGain.gain.setTargetAtTime(0, ctx.currentTime, 0.3); amb.gain.setTargetAtTime(0, ctx.currentTime, 0.5); } }
   function setMusicVol(v) { music.volume = v; }
   function toggle() {
     muted = !muted;
@@ -1510,7 +1524,7 @@ function whenModels(fn) { if (modelsDone) fn(); else modelWaiters.push(fn); }
   for (const n of names) L.load('models/' + n + '.glb?v=' + ASSET_V, gl => { gl.scene.updateMatrixWorld(true); MODELS[n] = gl.scene; prog[n] = 1; showProg(); done(); },
     x => { if (x && x.total) { prog[n] = Math.min(0.99, x.loaded / x.total); showProg(); } }, e => { console.warn('model failed', n, e); prog[n] = 1; done(); });
   // sounds into the browser cache too (they are decoded once the audio starts)
-  for (const a of ['siren', 'shoot', 'hit', 'ricochet', 'energy', 'victory', 'missile_alert', 'explosion', 'tank_shot_1', 'tank_shot_2', 'tank_shot_3', 'tank_epic']) fetch('audio/' + a + '.mp3').catch(() => {});
+  for (const a of ['siren', 'engine', 'shoot', 'hit', 'ricochet', 'energy', 'victory', 'missile_alert', 'explosion', 'tank_shot_1', 'tank_shot_2', 'tank_shot_3', 'tank_epic']) fetch('audio/' + a + '.mp3').catch(() => {});
 }
 // loading screen: k in 0..1, or -1 to hide it
 function loadingUI(k, text) {
@@ -1680,7 +1694,7 @@ function aimBone(b, child, dir) {
   b.quaternion.copy(pw.invert().multiply(rot.multiply(bw))); b.updateMatrixWorld(true);
 }
 // a seated soldier (hips at `hip`, in the vehicle's space)
-function seatedSoldier(hip, thigh, shin) {
+function seatedSoldier(hip, thigh, shin, arms) {
   const s = fitModel('soldier', { height: 1.75, skinned: true }); if (!s) return null;
   s.updateMatrixWorld(true);
   const bone = re => { let b = null; s.traverse(o => { if (!b && o.isBone && re.test(o.name)) b = o; }); return b; };
@@ -1688,6 +1702,11 @@ function seatedSoldier(hip, thigh, shin) {
     const up = bone(new RegExp(side + 'UpLeg(_\\d+)?$')), leg = bone(new RegExp(side + 'Leg(_\\d+)?$')), foot = bone(new RegExp(side + 'Foot(_\\d+)?$'));
     aimBone(up, leg, new THREE.Vector3(sx * thigh[0], thigh[1], thigh[2]));
     aimBone(leg, foot, new THREE.Vector3(sx * shin[0], shin[1], shin[2]));
+    if (arms) {                                   // arms: [upper arm, forearm] directions
+      const arm = bone(new RegExp(side + 'Arm(_\\d+)?$')), fore = bone(new RegExp(side + 'ForeArm(_\\d+)?$')), hand = bone(new RegExp(side + 'Hand(_\\d+)?$'));
+      aimBone(arm, fore, new THREE.Vector3(sx * arms[0][0], arms[0][1], arms[0][2]));
+      aimBone(fore, hand, new THREE.Vector3(sx * arms[1][0], arms[1][1], arms[1][2]));
+    }
   }
   s.position.set(hip[0], hip[1] - 0.93, hip[2]);
   return s;
@@ -1943,8 +1962,10 @@ const DRESS = {
     const sw = pivotAt(g, new THREE.Vector3(-0.84, 0.43, -0.47), ...parts.sw);
     v.steer = steer; v.wheels = [fw, rw, sw];
     // crew: the rider and the machine-gunner in the sidecar
-    const crew = [seatedSoldier([0.49, 0.97, -0.42], [0.16, -0.12, 1], [0.02, -1, -0.05]), seatedSoldier([-0.3, 0.6, -0.5], [0.1, 0.08, 1], [0, -0.5, 1])].filter(Boolean);
+    const crew = [seatedSoldier([0.49, 0.97, -0.42], [0.16, -0.12, 1], [0.02, -1, -0.05]), seatedSoldier([-0.3, 0.7, -0.42], [0.1, 0.05, 1], [0, -0.5, 1], [[-0.1, -0.55, 0.6], [-0.3, 0.15, 1]])].filter(Boolean);
     for (const c of crew) { g.add(c); v.mats = v.mats.concat(ownMats(c, col, 0.1)); }
+    // the gunner turns with his machine gun, hands on the grips
+    if (crew[1]) { g.updateMatrixWorld(true); v.turret.attach(crew[1]); }
     addLod(v, g, [holder, rake, rw, sw, ...crew], lo, col, 0.3);
   },
   icbm(v, col) {
@@ -3081,7 +3102,7 @@ function driveGround(v, dt, frozen) {
   const steer = chatOpen ? 0 : (keys.KeyA || keys.ArrowLeft ? 1 : 0) - (keys.KeyD || keys.ArrowRight ? 1 : 0);
   const moto = v.type === 'moto';
   const crew = moto && v.gunner && v.gunner !== myId;          // a teammate mans the sidecar machine gun
-  const maxF = tank ? 22.2 : 27.8, maxR = tank ? 8 : 10, acc = tank ? 6 : moto ? 12 : 10;   // 80 km/h tanks, 100 km/h jeeps and motorcycles
+  const maxF = tank ? 22.2 : 33.3, maxR = tank ? 8 : 10, acc = tank ? 6 : moto ? 13 : 11;   // 80 km/h tanks, 120 km/h jeeps and motorcycles
   const target = thr > 0 ? maxF : thr < 0 ? -maxR : 0;
   v.speed += Math.max(-acc * 1.5 * dt, Math.min(acc * dt, target - v.speed));
   let turn;
@@ -3106,7 +3127,7 @@ function driveGround(v, dt, frozen) {
   v.pos.y = restY(gf, v.p, v.r);              // with the tilt actually shown, so the wheels never dip into the ground
   if (Math.abs(gf.p) > 0.6) v.speed *= Math.exp(-3 * dt);
   // turret: turn towards the aim point; gun elevates to land the shell there
-  if (crew) { audio.engine('jeep', Math.abs(thr), Math.abs(v.speed) / maxF); return; }
+  if (crew) { audio.engine('moto', Math.abs(thr), Math.abs(v.speed) / maxF); return; }
   const tp = _v3.set(v.pos.x, v.pos.y + (tank ? 2.4 : moto ? 1.3 : 2.3), v.pos.z);
   const want = Math.atan2(aimPt.x - tp.x, aimPt.z - tp.z);
   const rate = tank ? 0.9 : 3.5;
@@ -3153,7 +3174,7 @@ function driveGround(v, dt, frozen) {
       }
     } else v.fireAcc = Math.min(v.fireAcc, 0.09);
   }
-  audio.engine(tank ? 'tank' : 'jeep', Math.abs(thr), Math.abs(v.speed) / maxF);
+  audio.engine(tank ? 'tank' : moto ? 'moto' : 'jeep', Math.abs(thr), Math.abs(v.speed) / maxF);
 }
 function drivePlane(v, dt, frozen) {
   if (!chatOpen) {
@@ -3375,7 +3396,7 @@ function driveMotoGunner(v, dt, frozen) {
       particles.mgflash(o, dir); audio.play('shoot', 0.35, 0, 1.9);
     }
   } else v.fireAcc = Math.min(v.fireAcc, 0.09);
-  audio.engine('jeep', 0.3, Math.abs(v.speed) / 27.8);
+  audio.engine('moto', 0.3, Math.abs(v.speed) / 33.3);
   gstT -= dt;
   if (gstT <= 0) { gstT = 0.05; socket.emit('gst', [+v.aimYaw.toFixed(3), +v.aimPitch.toFixed(3), v.f1]); }
 }
@@ -3465,7 +3486,7 @@ function driveDrone(v, dt, frozen) {
     v.f1 = 0; v.speed = 0;
     warnText = 'W — ВЗЛЁТ';
     if (v.thr > 0.05 && !frozen) { v.air = true; v.pos.y += 0.8; v.h = camYaw; logMsg('FPV в воздухе: летит туда, куда смотрите · W/S — скорость'); }
-    audio.engine('jeep', v.thr, 0);
+    audio.engine('drone', v.thr, 0);
     return;
   }
   v.bat -= dt;
@@ -3488,7 +3509,7 @@ function driveDrone(v, dt, frozen) {
     if (v.pos.y > 500) v.pos.y = 500;
   }
   v.f1 = 1; v.aimYaw = v.h; v.aimPitch = v.p;
-  audio.engine('jeep', 0.5 + v.thr * 0.5, 0.4 + v.speed / 70);
+  audio.engine('drone', 0.5 + v.thr * 0.5, 0.4 + v.speed / 70);
 }
 function dropFlares() {
   const v = myVehicle();
