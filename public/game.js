@@ -3120,9 +3120,9 @@ function driveGround(v, dt, frozen) {
   if (tank) turn = steer * 0.75 * (v.speed < -0.5 ? -1 : 1);
   else {
     // a car: the front wheels turn and the rest follows — no turning on the spot, wide turns at speed
-    const L = moto ? 1.8 : 3.0, maxD = 0.6 / (1 + Math.abs(v.speed) / 14);
-    v.steerA = (v.steerA || 0) + (steer * maxD - (v.steerA || 0)) * Math.min(1, dt * 6);
-    const cap = 9 / Math.max(3, Math.abs(v.speed));              // tyre grip
+    const L = moto ? 1.8 : 3.0, maxD = 0.6 / (1 + Math.abs(v.speed) / 45);      // the wheels still turn well at speed
+    v.steerA = (v.steerA || 0) + (steer * maxD - (v.steerA || 0)) * Math.min(1, dt * 9);
+    const cap = 24 / Math.max(6, Math.abs(v.speed));             // tyre grip: at full speed the turn radius is about 45 m (was 120 m)
     turn = Math.max(-cap, Math.min(cap, v.speed / L * Math.tan(v.steerA)));
     v.f2 = +v.steerA.toFixed(2);
   }
