@@ -21,7 +21,7 @@ const PORT = [{ x: -1200, z: 520 }, { x: 1200, z: 520 }];
 const SAMS = [[-1010, -110], [-1300, 330], [-1450, -60]];   // team 0, team 1 mirrored
 const HP = { tank: 120, jeep: 50, plane: 70, ship: 260, gunner: 40, icbm: 90, drone: 8, soldier: 30, moto: 35 };
 const HANGAR = { x: -1195, z: -75, hx: 18, hz: 15 };   // repair hangar of team 0; team 1 mirrored in x
-const ASSET_V = '7';                                  // bump when models change (they are cached by the browser)
+const ASSET_V = '8';                                  // bump when models change (they are cached by the browser)
 const TYPE_NAME = { tank: 'Танк', jeep: 'Джип', plane: 'Самолёт', ship: 'Корабль', gunner: 'Пулемётчик', icbm: 'SS-27', drone: 'FPV-дрон', soldier: 'Солдат', moto: 'Мотоцикл' };
 const TYPE_ICON = { tank: '▣', jeep: '◆', plane: '✈', ship: '⛴', gunner: '☗', icbm: '⇪', drone: '✣', soldier: '✚', moto: '⚙' };
 const TEAM_COL = [0x6f7d40, 0x3f6283];
@@ -2044,7 +2044,7 @@ const DRESS = {
 // ═══════════ TREES: the two tree models, mixed at random ═══════════
 // near the camera: the full models, instanced per 250 m cell; further out: a cut-out picture of the same tree
 // on two crossed quads (rendered once from the model), so thousands of trees stay cheap
-const TREE_CELL = 60; let TREE_NEAR = 110; var TREE_NEAR_T = null;
+const TREE_CELL = 40; let TREE_NEAR = 60; var TREE_NEAR_T = null;
 const TREE_KINDS = [];
 function floatGeo(src) {
   const g = new THREE.BufferGeometry(), get = ['getX', 'getY', 'getZ', 'getW'];
@@ -2150,7 +2150,7 @@ function updateTrees(force) {
   let changed = !!force || st.dirty;
   for (const c of st.cells.values()) {
     const d = Math.hypot(c.x - cx, c.z - cz, Math.max(0, camera.position.y - c.y - 20));
-    const near = d < TREE_NEAR, shad = d < 90;
+    const near = d < TREE_NEAR, shad = false;            // trees cast no shadows (cheap)
     if (near !== c.near) { c.near = near; changed = true; for (const m of c.meshes) m.visible = near; }
     if (shad !== c.shad) { c.shad = shad; for (const m of c.meshes) m.castShadow = shad; }
   }
