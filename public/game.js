@@ -31,7 +31,7 @@ const HITBOX = { tank: [1.7, 0, 2.7, 3.7], jeep: [1.35, 0.2, 2.6, 2.3], plane: [
 // damage per weapon against each vehicle type
 const DMG = {
   shell: { tank: 30, jeep: 45, plane: 45, ship: 24, gunner: 40, soldier: 60, moto: 45 },
-  mg: { tank: 1, jeep: 3, plane: 4, ship: 1, gunner: 5, soldier: 7, moto: 3 },
+  mg: { tank: 0.3, jeep: 3, plane: 4, ship: 0.3, gunner: 5, soldier: 7, moto: 3 },   // jeep, motorcycle and post machine guns barely scratch armour
   cannon: { tank: 1, jeep: 5, plane: 5, ship: 1, gunner: 8, soldier: 12, moto: 5 },
   rocket: { tank: 36, jeep: 45, plane: 40, ship: 30, gunner: 40, soldier: 60, moto: 45 },
   navshell: { tank: 24, jeep: 40, plane: 30, ship: 22, gunner: 40, soldier: 60, moto: 40 },
@@ -2757,7 +2757,7 @@ function spawnShot(k, o, vel, mine, ownerVid, extra = {}) {
 }
 function teamOfVid(vid) { const v = vehicles.get(vid); return v ? v.team : -1; }
 function hitVehicle(v, k, pt, scale = 1) {
-  const dmg = Math.round((DMG[k][v.type] ?? DMG[k].jeep) * scale);
+  const raw = (DMG[k][v.type] ?? DMG[k].jeep) * scale, dmg = raw < 1 ? Math.round(raw * 10) / 10 : Math.round(raw);   // small-arms damage can be a fraction of a point
   if (dmg <= 0) return;
   socket.emit('hit', { vid: v.vid, dmg, k, pt: [+pt.x.toFixed(1), +pt.y.toFixed(1), +pt.z.toFixed(1)] });
 }
@@ -4001,7 +4001,7 @@ function updateBottom() {
   const v = myVehicle(), p = me();
   if (!v) return;
   $('myname').textContent = vName(v).toUpperCase() + (p ? ' · ' + p.name.toUpperCase() : '');
-  $('hptxt').textContent = Math.max(0, v.hp);
+  $('hptxt').textContent = Math.max(0, Math.ceil(v.hp));
   const k = v.hp / v.max;
   $('hpfill').style.width = Math.max(0, k * 100) + '%';
   $('hpfill').style.background = k > .5 ? 'linear-gradient(90deg,#8fbf55,#b6d35f)' : k > .25 ? 'linear-gradient(90deg,#d29a35,#e3b54a)' : 'linear-gradient(90deg,#c9432f,#e0503f)';

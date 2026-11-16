@@ -70,7 +70,7 @@ function publicRoom(r) {
   return {
     code: r.code, hostId: r.hostId, state: r.state, mode: 'team', seed: r.seed, tickets: r.tickets,
     timeLeft: r.endsAt && r.state === 'playing' ? Math.max(0, r.endsAt - Date.now()) : null,
-    players: [...r.players.values()].map(p => ({ id: p.id, name: p.name, team: p.team, vid: p.vid, kills: p.kills, deaths: p.deaths, dmg: p.dmg })),
+    players: [...r.players.values()].map(p => ({ id: p.id, name: p.name, team: p.team, vid: p.vid, kills: p.kills, deaths: p.deaths, dmg: Math.round(p.dmg) })),
     vehicles: r.vehicles.map(v => ({ vid: v.vid, team: v.team, type: v.type, n: v.n, hp: v.hp, max: v.max, alive: v.alive, ammo: v.ammo, spent: v.spent, driver: v.driver, gunner: v.gunner || null, spawn: v.spawn, st: v.st, })),
     hangars: (r.hangars || []).map(h => ({ team: h.team, hp: h.hp, max: h.max, busy: h.busy, prog: h.prog })),
   };
@@ -159,9 +159,9 @@ function destroyVehicle(r, v, by, how) {
 function damage(r, v, dmg, by, pt, kind) {
   if (!v.alive || r.state !== 'playing') return;
   const real = Math.min(dmg, v.hp);
-  v.hp -= real;
+  v.hp = Math.round((v.hp - real) * 10) / 10;
   const sh = by && r.players.get(by);
-  if (sh && sh.team !== v.team) { sh.dmg += real; v.lastHitBy = sh.id; v.lastHitAt = Date.now(); }
+  if (sh && sh.team !== v.team) { sh.dmg = Math.round((sh.dmg + real) * 10) / 10; v.lastHitBy = sh.id; v.lastHitAt = Date.now(); }
   io.to(r.code).emit('dmg', { vid: v.vid, by, dmg: real, hp: v.hp, pt, kind });
   // hit while in the repair hangar: no repair for a minute, counted from the last hit
   if (v.inHangar && v.hp > 0) { v.noRepair = Date.now() + REPAIR_T * 1000; io.to(r.code).emit('repair', { vid: v.vid, state: 'hit', prog: 0 }); }
@@ -271,7 +271,7 @@ io.on('connection', socket => {
     p.hits = (p.hits || []).filter(t => now - t < 1000);
     if (p.hits.length >= 18) return;
     p.hits.push(now);
-    const dmg = Math.max(1, Math.min(h.k === 'icbm' ? 300 : 95, Math.round(Number(h.dmg) || 0)));
+    const dmg = Math.max(0.1, Math.min(h.k === 'icbm' ? 300 : 95, Math.round((Number(h.dmg) || 0) * 10) / 10));   // fractions allowed (machine guns on armour)
     const pt = Array.isArray(h.pt) ? h.pt.slice(0, 3).map(Number) : null;
     damage(room, v, dmg, p.id, pt, String(h.k || '').slice(0, 8));
   });
@@ -282,7 +282,7 @@ io.on('connection', socket => {
     if (!p || !hg || hg.team === p.team || hg.hp <= 0 || Date.now() < room.startAt) return;
     const now = Date.now();
     p.hh = (p.hh || []).filter(t => now - t < 1000); if (p.hh.length >= 10) return; p.hh.push(now);
-    hg.hp = Math.max(0, hg.hp - Math.max(1, Math.min(120, Math.round(Number(h.dmg) || 0))));
+    hg.hp = Math.max(0, Math.round((hg.hp - Math.max(0.1, Math.min(120, Number(h.dmg) || 0))) * 10) / 10);
     if (hg.hp <= 0) {
       const cur = hg.busy; hg.busy = null; hg.prog = 0;
       if (cur) io.to(room.code).emit('repair', { vid: cur, state: 'lost', prog: 0 });
