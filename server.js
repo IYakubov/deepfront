@@ -28,7 +28,7 @@ const MACHINES = 14;             // per team; machine-gun posts, drones and foot
 const NOT_MACHINE = new Set(['gunner', 'drone', 'soldier']);
 const PFX = { soldier: 'a' };     // vid prefix (ship already uses 's')
 // repair hangar per base (team 0; team 1 mirrored in x): one machine at a time, 60 s, can be destroyed
-const HANGAR = { x: -1195, z: -75, hx: 18, hz: 15, hp: 300 };
+const HANGAR = { x: -1195, z: -75, hx: 18, hz: 15, hp: 120 };   // as tough as a tank
 const REPAIR_T = 60;
 const REPAIRABLE = new Set(['tank', 'jeep', 'plane', 'moto']);
 // base layout for team 0 (west); team 1 is mirrored in x
@@ -84,11 +84,12 @@ function hangarTick(r) {
   for (const h of r.hangars || []) {
     if (h.hp <= 0) continue;
     const inside = v => v.team === h.team && v.alive && REPAIRABLE.has(v.type) && v.st && Math.abs(v.st[0] - h.x) < h.hx - 1 && Math.abs(v.st[2] - h.z) < h.hz - 1 && Math.abs(v.st[6] || 0) < 1.5;
-    for (const v of r.vehicles) { if (inside(v)) v.inHangar = v.inHangar || now; else v.inHangar = 0; }
+    for (const v of r.vehicles) if (v.team === h.team) { if (inside(v)) v.inHangar = v.inHangar || now; else v.inHangar = 0; }
     let cur = h.busy && r.vehicles.find(v => v.vid === h.busy);
+    if (cur && cur.noRepair > now) { cur = null; h.busy = null; h.prog = 0; io.to(r.code).emit('hangar', hangarState(h)); }
     if (cur && !cur.inHangar) { io.to(r.code).emit('repair', { vid: cur.vid, state: 'left', prog: h.prog }); cur = null; h.busy = null; h.prog = 0; io.to(r.code).emit('hangar', hangarState(h)); }
     if (!cur) {
-      const next = r.vehicles.filter(v => v.inHangar && v.hp < v.max).sort((a, b) => a.inHangar - b.inHangar)[0];
+      const next = r.vehicles.filter(v => v.team === h.team && v.inHangar && v.hp < v.max && !(v.noRepair > now)).sort((a, b) => a.inHangar - b.inHangar)[0];
       if (!next) continue;
       cur = next; h.busy = next.vid; h.from = next.hp; h.t0 = now; h.prog = 0;
       io.to(r.code).emit('repair', { vid: next.vid, state: 'start', prog: 0 });
@@ -162,6 +163,8 @@ function damage(r, v, dmg, by, pt, kind) {
   const sh = by && r.players.get(by);
   if (sh && sh.team !== v.team) { sh.dmg += real; v.lastHitBy = sh.id; v.lastHitAt = Date.now(); }
   io.to(r.code).emit('dmg', { vid: v.vid, by, dmg: real, hp: v.hp, pt, kind });
+  // hit while in the repair hangar: no repair for a minute, counted from the last hit
+  if (v.inHangar && v.hp > 0) { v.noRepair = Date.now() + REPAIR_T * 1000; io.to(r.code).emit('repair', { vid: v.vid, state: 'hit', prog: 0 }); }
   if (v.hp <= 0) destroyVehicle(r, v, by, kind);
 }
 
