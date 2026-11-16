@@ -21,7 +21,7 @@ const PORT = [{ x: -1200, z: 520 }, { x: 1200, z: 520 }];
 const SAMS = [[-1010, -110], [-1300, 330], [-1450, -60]];   // team 0, team 1 mirrored
 const HP = { tank: 120, jeep: 50, plane: 70, ship: 260, gunner: 40, icbm: 90, drone: 8, soldier: 30, moto: 35 };
 const HANGAR = { x: -1195, z: -75, hx: 18, hz: 15 };   // repair hangar of team 0; team 1 mirrored in x
-const ASSET_V = '8';                                  // bump when models change (they are cached by the browser)
+const ASSET_V = '9';                                  // bump when models change (they are cached by the browser)
 const TYPE_NAME = { tank: 'Танк', jeep: 'Джип', plane: 'Самолёт', ship: 'Корабль', gunner: 'Пулемётчик', icbm: 'SS-27', drone: 'FPV-дрон', soldier: 'Солдат', moto: 'Мотоцикл' };
 const TYPE_ICON = { tank: '▣', jeep: '◆', plane: '✈', ship: '⛴', gunner: '☗', icbm: '⇪', drone: '✣', soldier: '✚', moto: '⚙' };
 const TEAM_COL = [0x6f7d40, 0x3f6283];
@@ -215,7 +215,7 @@ const audio = (() => {
       if (!engSrc) { engSrc = ctx.createBufferSource(); engSrc.buffer = buffers.engine; engSrc.loop = true; engSrc.loopStart = 0.35; engSrc.loopEnd = 8.35; engSG = ctx.createGain(); engSG.gain.value = 0; engSrc.connect(engSG); engSG.connect(master); engSrc.start(0, 0.35); }
       const k = Math.min(1, Math.max(speed, load * 0.35));
       engSrc.playbackRate.setTargetAtTime(sm[0] + (sm[1] - sm[0]) * k, t, 0.35);
-      engSG.gain.setTargetAtTime(on * sm[2] * (0.16 + load * 0.1 + Math.min(1, speed) * 0.08), t, 0.25);
+      engSG.gain.setTargetAtTime(on * sm[2] * (0.08 + load * 0.06 + Math.min(1, speed) * 0.05), t, 0.25);
       engGain.gain.setTargetAtTime(0, t, 0.2); amb.gain.setTargetAtTime(on * 0.008, t, 0.5);
       return;
     }
@@ -269,7 +269,8 @@ const audio = (() => {
     node.connect(master); o.start(t); o.stop(t + 1.7);
     play('hit', 1.1 * k, pan * 0.6, 0.55);
   }
-  return { unlock, play, at, engine, engineOff, setMusicVol, toggle, tone, whoosh, boom, siren };
+  const musicState = () => ({ src: music.src.split('/').pop(), paused: music.paused, t: +music.currentTime.toFixed(1), vol: music.volume, err: music.error && music.error.code, ready: music.readyState, muted, unlocked });
+  return { unlock, play, at, engine, engineOff, setMusicVol, toggle, tone, whoosh, boom, siren, musicState };
 })();
 $('mute').onclick = () => { audio.unlock(); audio.toggle(); };
 const _a1 = new THREE.Vector3(), _a2 = new THREE.Vector3();
@@ -1514,7 +1515,7 @@ const modelWaiters = [];
 function whenModels(fn) { if (modelsDone) fn(); else modelWaiters.push(fn); }
 {
   const L = new GLTFLoader(); L.setMeshoptDecoder(MeshoptDecoder);
-  const names = ['tank', 'jet', 'ship', 'jeep', 'drone', 'soldier', 'tree1', 'tree2', 'tank_lo', 'jet_lo', 'ship_lo', 'jeep_lo', 'drone_lo',
+  const names = ['tank', 'jet', 'ship', 'jeep', 'drone', 'soldier', 'tree2', 'tank_lo', 'jet_lo', 'ship_lo', 'jeep_lo', 'drone_lo',
     'country', 'country_lo', 'abandoned', 'abandoned_lo', 'moto', 'moto_lo'];
   let left = names.length;
   const prog = Object.fromEntries(names.map(n => [n, 0]));
@@ -2044,6 +2045,7 @@ const DRESS = {
 // ═══════════ TREES: the two tree models, mixed at random ═══════════
 // near the camera: the full models, instanced per 250 m cell; further out: a cut-out picture of the same tree
 // on two crossed quads (rendered once from the model), so thousands of trees stay cheap
+const TREE_FLAT = true;        // lowest quality: every tree is the flat cut-out picture, at any distance
 const TREE_CELL = 40; let TREE_NEAR = 60; var TREE_NEAR_T = null;
 const TREE_KINDS = [];
 function floatGeo(src) {
@@ -2058,7 +2060,7 @@ function floatGeo(src) {
   return g;
 }
 function prepTrees() {
-  for (const [name, h0, h1] of [['tree1', 9, 15], ['tree2', 10, 17]]) {
+  for (const [name, h0, h1] of [['tree2', 10, 17]]) {            // pines only
     const src = MODELS[name]; if (!src) continue;
     src.updateMatrixWorld(true);
     const b = new THREE.Box3().setFromObject(src), size = b.getSize(new THREE.Vector3()), c = b.getCenter(new THREE.Vector3());
@@ -2081,7 +2083,7 @@ function prepTrees() {
     const dl = new THREE.DirectionalLight(0xfff0d8, 1.8); dl.position.set(0.6, 1, 0.8); sc.add(dl);
     sc.add(src.clone(true));
     const snap = cam => {
-      const rt = new THREE.WebGLRenderTarget(256, 256);
+      const rt = new THREE.WebGLRenderTarget(128, 128);
       rt.texture.generateMipmaps = true; rt.texture.minFilter = THREE.LinearMipmapLinearFilter; rt.texture.anisotropy = 4;
       const prevRT = renderer.getRenderTarget(), prevCol = renderer.getClearColor(new THREE.Color()), prevA = renderer.getClearAlpha();
       renderer.setRenderTarget(rt); renderer.setClearColor(0x000000, 0); renderer.clear(); renderer.render(sc, cam);
@@ -2123,7 +2125,7 @@ function plantTrees(group, trees, proc) {
     for (const [key, cell] of byCell) {
       cell.list.forEach((mats, k) => {
         if (!mats.length) return;
-        for (const p of TREE_KINDS[k].parts) {
+        if (!TREE_FLAT) for (const p of TREE_KINDS[k].parts) {
           const im = new THREE.InstancedMesh(p.geo, p.mat, mats.length);
           mats.forEach((m, i) => im.setMatrixAt(i, m));
           im.castShadow = false; im.receiveShadow = true; im.visible = false;
@@ -2150,7 +2152,7 @@ function updateTrees(force) {
   let changed = !!force || st.dirty;
   for (const c of st.cells.values()) {
     const d = Math.hypot(c.x - cx, c.z - cz, Math.max(0, camera.position.y - c.y - 20));
-    const near = d < TREE_NEAR, shad = false;            // trees cast no shadows (cheap)
+    const near = !TREE_FLAT && d < TREE_NEAR, shad = false;            // trees cast no shadows (cheap)
     if (near !== c.near) { c.near = near; changed = true; for (const m of c.meshes) m.visible = near; }
     if (shad !== c.shad) { c.shad = shad; for (const m of c.meshes) m.castShadow = shad; }
   }
@@ -4131,7 +4133,7 @@ function startPlaying(fromStart) {
   document.body.classList.add('cmdv');
   const b = BASES[myTeam()];
   cmdCenterOn(b.x, b.z - 60, 560); cmd.x = cmd.tx; cmd.z = cmd.tz; cmd.h = 560;
-  audio.setMusicVol(0.1);
+  audio.setMusicVol(0.22);
   renderCmdList();
   centerMsg(fromStart ? 'ВЫБЕРИТЕ ТЕХНИКУ' : 'ВЫ В БОЮ', 'клик по своей технике — сесть в неё', 2600);
 }
