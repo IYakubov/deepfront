@@ -3707,11 +3707,11 @@ function updateMe(dt, now) {
   if (sendT <= 0) { sendT = 0.05; socket.emit('st', stateOf(v)); }
 }
 // ═══════════ AUTOPILOT (Li L9) ═══════════
-// P in the L9: the car drives itself along the road to the far back of the enemy base, hides next to the houses there
+// P in the L9: the car drives itself at full speed, cross country through the forests (off the road), to the far back of the enemy base, hides next to the houses there
 // and waits. On the way it hunts enemy machines it sees (not ships, not jets in the air, not ones inside their base),
 // destroys them with the roof machine gun and carries on. The player who switched it on runs it from his own browser;
 // anyone of the team can climb in at any moment and take over.
-const AUTO_CRUISE = 25, AUTO_SEE = 230, AUTO_LOSE = 330;
+const AUTO_CRUISE = 33.3, AUTO_SEE = 230, AUTO_LOSE = 330;
 const isAuto = v => !!v && v.auto === myId && v.alive && !v.dead && v.vid !== myVid;
 function autopilotOn(v) {
   if (!v || v.skin !== 'l9' || !v.alive) return;
@@ -3741,13 +3741,70 @@ function autoHideSpot(team) {
   }
   return pick || c;
 }
+// path finding on a 20 m grid: cross country, through the forests, away from the road and the towns; no water, no cliffs
+const AG = 20, AGX = Math.ceil(MAP_X * 2 / AG), AGZ = Math.ceil(MAP_Z * 2 / AG);
+let autoCost = null;
+// the left flank seen from home (team 0 drives towards +x, so its left is -z; team 1 the other way)
+function autoCostGrid(team) {
+  if (autoCost && autoCost.world === world && autoCost.team === team) return autoCost.c;
+  const left = team ? 1 : -1;
+  const c = new Float32Array(AGX * AGZ), trees = new Uint16Array(AGX * AGZ);
+  for (const t of world.trees) { const i = Math.floor((t.x + MAP_X) / AG), k = Math.floor((t.z + MAP_Z) / AG); if (i >= 0 && k >= 0 && i < AGX && k < AGZ) trees[k * AGX + i]++; }
+  for (let k = 0; k < AGZ; k++) for (let i = 0; i < AGX; i++) {
+    const x = -MAP_X + (i + 0.5) * AG, z = -MAP_Z + (k + 0.5) * AG, h = H(x, z);
+    let cost = 1;
+    if (h < -0.6 || Math.abs(x) > MAP_X - 40 || Math.abs(z) > MAP_Z - 40) cost = Infinity;                       // sea, map edge
+    else {
+      const sl = Math.max(Math.abs(H(x + 8, z) - H(x - 8, z)), Math.abs(H(x, z + 8) - H(x, z - 8))) / 16;
+      if (sl > 0.75) cost = Infinity; else cost += sl * sl * 12;                                                     // cliffs no, slopes cost
+      if (boxesIn(x - 9, z - 9, x + 9, z + 9).some(b => b.y1 > h + 1.5 && Math.abs(x - b.x) < b.hx + 9 && Math.abs(z - b.z) < b.hz + 9)) cost = Infinity;
+      cost += Math.max(0, 1 - Math.abs(z - roadZ(x)) / 120) * 2.5;                                                   // keep off the road
+      if (typeof inPad === 'function' && inPad(x, z, 40)) cost += 2;                                                 // and out of the towns
+      if ((z - roadZ(x)) * left < 0) cost += 2;                                                                       // the right-hand side: avoid
+      cost *= trees[k * AGX + i] ? 0.55 : 1;                                                                          // under the trees
+    }
+    c[k * AGX + i] = cost;
+  }
+  autoCost = { world, team, c };
+  return c;
+}
+function autoPath(sx, sz, dx, dz, team) {
+  const c = autoCostGrid(team), N = AGX * AGZ;
+  const cell = (x, z) => Math.max(0, Math.min(AGZ - 1, Math.floor((z + MAP_Z) / AG))) * AGX + Math.max(0, Math.min(AGX - 1, Math.floor((x + MAP_X) / AG)));
+  const s = cell(sx, sz), d = cell(dx, dz);
+  const g = new Float32Array(N).fill(Infinity), from = new Int32Array(N).fill(-1), done = new Uint8Array(N);
+  const heap = [], push = (n, f) => { heap.push([f, n]); let i = heap.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } };
+  const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = i * 2 + 1, r = l + 1; let m = i; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; i = m; } } return top; };
+  const hx = d % AGX, hz = (d / AGX) | 0, heur = n => Math.hypot(n % AGX - hx, ((n / AGX) | 0) - hz) * 0.55;
+  const sxI = s % AGX, szI = (s / AGX) | 0;
+  g[s] = 0; push(s, heur(s));
+  const nb = [[1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1], [1, 1, 1.414], [1, -1, 1.414], [-1, 1, 1.414], [-1, -1, 1.414]];
+  while (heap.length) {
+    const [, n] = pop(); if (done[n]) continue; done[n] = 1; if (n === d) break;
+    const ni = n % AGX, nk = (n / AGX) | 0;
+    for (const [di, dk, w] of nb) {
+      const i = ni + di, k = nk + dk; if (i < 0 || k < 0 || i >= AGX || k >= AGZ) continue;
+      const m = k * AGX + i;
+      let cm = c[m];
+      // right by the start and the goal buildings are close: let it squeeze through there
+      if (cm === Infinity && (Math.max(Math.abs(i - sxI), Math.abs(k - szI)) <= 3 || Math.max(Math.abs(i - hx), Math.abs(k - hz)) <= 3)) cm = 4;
+      if (cm === Infinity || done[m]) continue;
+      const ng = g[n] + w * ((c[n] === Infinity ? 4 : c[n]) + cm) / 2;
+      if (ng < g[m]) { g[m] = ng; from[m] = n; push(m, ng + heur(m)); }
+    }
+  }
+  if (from[d] < 0 && d !== s) return null;
+  const out = []; for (let n = d; n >= 0 && n !== s; n = from[n]) out.push({ x: -MAP_X + (n % AGX + 0.5) * AG, z: -MAP_Z + (((n / AGX) | 0) + 0.5) * AG });
+  out.reverse();
+  return out.filter((p, i) => i % 3 === 2 || i === out.length - 1);
+}
 function autoRoute(v) {
-  const dest = autoHideSpot(v.team), pts = [];
-  const dir = Math.sign(dest.x - v.pos.x) || 1;
-  // join the road, follow it to the edge of the enemy base, then go across to the hiding place
-  const endX = BASES[1 - v.team].x - Math.sign(BASES[1 - v.team].x) * (BASE_R - 40);
-  for (let x = v.pos.x + dir * 40; (endX - x) * dir > 0; x += dir * 70) pts.push({ x, z: roadZ(x) });
-  pts.push({ x: endX, z: roadZ(endX) });
+  const dest = autoHideSpot(v.team);
+  let pts = autoPath(v.pos.x, v.pos.z, dest.x, dest.z, v.team);
+  if (!pts) {                                     // no way found: fall back to the road
+    pts = []; const dir = Math.sign(dest.x - v.pos.x) || 1;
+    for (let x = v.pos.x + dir * 40; (dest.x - x) * dir > 0; x += dir * 70) pts.push({ x, z: roadZ(x) });
+  }
   pts.push(dest);
   return { pts, i: 0, dest, mode: 'go', stuckT: 0, revT: 0, revS: 1, lastPos: v.pos.clone(), checkT: 0, scanT: 0, target: null, losT: 0, sendT: 0, fireT: 0 };
 }
@@ -3780,7 +3837,7 @@ function autoDrive(v, dt) {
     let wp = ai.pts[ai.i];
     while (wp && Math.hypot(wp.x - v.pos.x, wp.z - v.pos.z) < (ai.i === ai.pts.length - 1 ? 6 : 28)) { ai.i++; ai.stuckN = 0; wp = ai.pts[ai.i]; }
     if (!wp) { ai.mode = 'park'; }
-    else { gx = wp.x; gz = wp.z; if (ai.i === ai.pts.length - 1) { cruise = 12; } if (inEnemyBase(v.pos.x, v.pos.z, 80)) cruise = Math.min(cruise, 12); }   // creep through the base
+    else { gx = wp.x; gz = wp.z; if (ai.i === ai.pts.length - 1) cruise = 14; }
   }
   // ── steering towards the goal, around obstacles and water
   let thr = 0, steer = 0;
@@ -3793,7 +3850,7 @@ function autoDrive(v, dt) {
     }
     const err = wrap(want - v.h);
     steer = Math.max(-1, Math.min(1, err * 2.2));
-    const sharp = Math.abs(err) > 0.7 ? 8 : Math.abs(err) > 0.35 ? 15 : cruise;
+    const sharp = Math.abs(err) > 0.8 ? 10 : Math.abs(err) > 0.4 ? 20 : cruise;
     const tgt = Math.min(cruise, sharp, stopAt ? Math.max(0, (dist - stopAt) * 0.5) : Math.max(4, dist * 0.6));
     thr = v.speed < tgt - 0.5 ? 1 : v.speed > tgt + 1.5 ? -1 : 0;
     // stuck? back up turning the other way for a moment
