@@ -3980,6 +3980,9 @@ function updateSpotting(dt) {
 // and an enemy's name and health appear only while it is under the crosshair
 let aimedVid = null, aimedT = 0;
 const heatView = () => { const v = myVehicle(); return !!v && v.type === 'plane'; };
+// an enemy machine someone is in right now, within 500 m of the machine I'm in: shown on screen and on the minimap
+const ENEMY_NEAR = 500;
+const enemyNear = o => { const v = myVehicle(); return !!v && !!(o.driver || o.gunner) && o.pos.distanceTo(v.pos) <= ENEMY_NEAR; };
 function updateMarkers() {
   const v = myVehicle(), heat = heatView(), now = performance.now();
   if (aimHit && aimHit.kind === 'veh' && aimHit.v.alive && aimHit.v.team !== myTeam()) { aimedVid = aimHit.v.vid; aimedT = now; }
@@ -3988,14 +3991,23 @@ function updateMarkers() {
     const mk = o.marker;
     if (!inGame || mode !== 'drive' || o === v || !o.alive || !o.vis.g.visible) { mk.style.display = 'none'; continue; }
     const enemy = o.team !== myTeam();
-    if (enemy && !(heat ? o.seen : o.vid === aimedVid)) { mk.style.display = 'none'; continue; }
+    const near = enemy && enemyNear(o);
+    if (enemy && !(near || (heat ? o.seen : o.vid === aimedVid))) { mk.style.display = 'none'; continue; }
     const dist = v ? o.pos.distanceTo(v.pos) : 0;
-    if (dist > (enemy ? (heat ? 900 : 2600) : 1400)) { mk.style.display = 'none'; continue; }
-    const p = project(_v1.copy(o.pos).setY(o.pos.y + (o.type === 'ship' ? 18 : o.type === 'plane' ? 5 : 4.5)));
+    if (dist > (enemy ? (near ? ENEMY_NEAR : heat ? 900 : 2600) : 1400)) { mk.style.display = 'none'; continue; }
+    let p = project(_v1.copy(o.pos).setY(o.pos.y + (o.type === 'ship' ? 18 : o.type === 'plane' ? 5 : 4.5)));
+    let edge = false;
+    if (near && (!p || p[0] < 40 || p[0] > innerWidth - 40 || p[1] < 40 || p[1] > innerHeight - 40)) {
+      // off screen: a compass pointer on the edge of the view, turned towards it
+      _v5.copy(o.pos).applyMatrix4(camera.matrixWorldInverse);
+      const ang = Math.atan2(_v5.x, -_v5.z);
+      p = [innerWidth / 2 + Math.sin(ang) * (innerWidth / 2 - 70), innerHeight / 2 - Math.cos(ang) * (innerHeight / 2 - 60)];
+      mk.style.setProperty('--ang', ang + 'rad'); edge = true;
+    }
     if (!p) { mk.style.display = 'none'; continue; }
-    mk.style.display = 'block'; mk.className = 'mk ' + (enemy ? 'en' : 'al');
+    mk.style.display = 'block'; mk.className = 'mk ' + (enemy ? 'en' : 'al') + (edge ? ' edge' : '');
     mk.style.left = p[0] + 'px'; mk.style.top = p[1] + 'px';
-    mk.firstChild.textContent = (o.driver ? nameOf(o.driver) + ' · ' : '') + TYPE_NAME[o.type] + (dist > 150 ? ' · ' + Math.round(dist) + ' м' : '');
+    mk.firstChild.textContent = (o.driver ? nameOf(o.driver) + ' · ' : '') + TYPE_NAME[o.type] + (dist > 150 || enemy ? ' · ' + Math.round(dist) + ' м' : '');
     mk.querySelector('i').style.width = Math.round(o.hp / o.max * 100) + '%';
   }
 }
@@ -4060,7 +4072,7 @@ function drawMinimap() {
   for (const s of world.samSites) { const [x, y] = mmP(s.x, s.z); c.fillStyle = TEAM_CSS[s.team]; c.beginPath(); c.moveTo(x, y - 6); c.lineTo(x + 5, y + 4); c.lineTo(x - 5, y + 4); c.closePath(); c.fill(); }
   for (const v of vehicles.values()) {
     if (!v.alive || !v.vis.g.visible) continue;
-    if (v.team !== team && !(v.seen && heatView())) continue;
+    if (v.team !== team && !(enemyNear(v) || (v.seen && heatView()))) continue;
     const [x, y] = mmP(v.pos.x, v.pos.z);
     c.save(); c.translate(x, y); c.rotate(-v.h + Math.PI);
     c.fillStyle = v.vid === myVid ? '#fff' : v.team === team ? (v.team ? '#8fb8e0' : '#c2d27a') : '#ff5a46';
