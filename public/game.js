@@ -30,7 +30,7 @@ const TEAM_CSS = ['#a9b86a', '#7fa6c9'];
 const HITBOX = { tank: [1.7, 0, 2.7, 3.7], jeep: [1.35, 0.2, 2.6, 2.3], plane: [6.6, -1.2, 2.6, 9.5], ship: [3.2, -2, 10, 24], gunner: [1.7, 0, 2.2, 1.7], icbm: [2.05, 0, 4.3, 11], drone: [0.7, -0.35, 0.5, 0.7], soldier: [0.42, 0, 1.85, 0.42], moto: [1.05, 0, 1.7, 1.6], l9: [1.0, 0.15, 2.3, 2.6] };
 // damage per weapon against each vehicle type
 const DMG = {
-  shell: { tank: 30, jeep: 45, plane: 45, ship: 24, gunner: 40, soldier: 60, moto: 45 },
+  shell: { tank: 30, jeep: 50, plane: 45, ship: 24, gunner: 40, soldier: 60, moto: 45 },
   mg: { tank: 1, jeep: 3, plane: 4, ship: 1, gunner: 5, soldier: 7, moto: 3 },   // on tanks and ships only every 3rd machine-gun hit counts (see hitVehicle)
   cannon: { tank: 1, jeep: 5, plane: 5, ship: 1, gunner: 8, soldier: 12, moto: 5 },
   rocket: { tank: 36, jeep: 45, plane: 40, ship: 30, gunner: 40, soldier: 60, moto: 45 },
