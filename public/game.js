@@ -2423,7 +2423,7 @@ function resetVehicle(v, d) {
   v.pos.set(sp.x, spawnY(v.type, sp.x, sp.z), sp.z); v.tpos.copy(v.pos);
   v.h = v.th = sp.yaw; v.p = v.r = v.tp = v.tr = 0; v.speed = v.tspeed = 0;
   v.aimYaw = sp.yaw; v.aimPitch = 0; v.f1 = 0; v.f2 = 0; v.dead = null;
-  v.air = false; v.thr = 0; v.tel = 1; v.rudder = 0; v.crashSent = false; v.bombs = 3; v.rk = 8; v.loadT = 0; v.bat = 100; v.erect = 0; v.tmode = false; v.mload = 0; v.icbms = 2; v.altPrev = false;
+  v.air = false; v.thr = 0; v.tel = 1; v.rudder = 0; v.crashSent = false; v.bombs = 3; v.rk = 16; v.loadT = 0; v.bat = 100; v.erect = 0; v.tmode = false; v.mload = 0; v.icbms = 2; v.altPrev = false;
   v.tgt = { x: BASES[1 - v.team].x, z: BASES[1 - v.team].z }; v.tzoom = 500;
   v.alive = true; v.hp = d.max || v.max;
   v.vis.g.visible = true;
@@ -2505,7 +2505,7 @@ function updateVis(v, dt) {
   } else if (v.type === 'plane') {
     v.vis.gear.visible = !v.air && !v.vis.lo;
     v.vis.bombs.forEach((b, i) => { b.visible = i < v.bombs; });
-    v.vis.missiles.forEach((m, i) => { m.visible = v.rk > i * 4; });
+    v.vis.missiles.forEach((m, i) => { m.visible = v.rk > i * 8; });
     if (v.vis.canopy) v.vis.canopy.rotation.x = v.air || Math.abs(v.speed) > 6 ? 0.42 : 0;
     const k = v.air ? 0.4 + v.f2 * 0.8 : v.f2 * 0.5;
     v.vis.flame.scale.set(1, 0.3 + k, 1); v.vis.core.scale.set(1, 0.3 + k, 1);
@@ -3306,10 +3306,10 @@ function drivePlane(v, dt, frozen) {
   }
   bombCd = Math.max(0, bombCd - dt);
   // rearm: parked at the home base for 30 s
-  if (!v.air && Math.abs(v.speed) < 1 && inOwnBase(v) && (v.bombs < 3 || v.rk < 8 || flares < 3)) {
+  if (!v.air && Math.abs(v.speed) < 1 && inOwnBase(v) && (v.bombs < 3 || v.rk < 16 || flares < 3)) {
     v.loadT += dt;
     warnText = 'ЗАГРУЗКА БОМБ И РАКЕТ: ' + Math.ceil(30 - v.loadT) + ' с';
-    if (v.loadT >= 30) { v.bombs = 3; v.rk = 8; flares = 3; v.loadT = 0; audio.play('energy', 0.7); centerMsg('ВООРУЖЕНИЕ ЗАГРУЖЕНО', '3 бомбы · 8 ракет', 1800, '#9bff7a'); }
+    if (v.loadT >= 30) { v.bombs = 3; v.rk = 16; flares = 3; v.loadT = 0; audio.play('energy', 0.7); centerMsg('ВООРУЖЕНИЕ ЗАГРУЖЕНО', '3 бомбы · 16 ракет', 1800, '#9bff7a'); }
   } else v.loadT = 0;
   flareCd = Math.max(0, flareCd - dt);
   audio.engine('plane', v.thr, Math.min(1, Math.abs(v.speed) / 160));
@@ -4013,7 +4013,7 @@ function updateBottom() {
   if (v.type === 'tank') { set(2, 'ПРИЦЕЛ', aimHit ? Math.round(aimHit.t) + ' м' : '—'); bar(3, 'ПУШКА', 1 - reload / 4, reload > 0 ? '#e3a53c' : '#9bdc6a'); bar(4, 'БРОНЯ', k, '#9aa39a'); set(5, 'SHIFT / ПКМ', sniper ? 'ОБЗОР' : 'ПРИЦЕЛ'); }
   else if (v.type === 'moto') { set(2, 'ПРИЦЕЛ', aimHit ? Math.round(aimHit.t) + ' м' : '—'); bar(3, 'ПУЛЕМЁТ', 1, '#9bdc6a'); bar(4, 'КОРПУС', k, '#9aa39a'); set(5, mySeat ? 'ВОДИТЕЛЬ' : 'СТРЕЛОК', mySeat ? (v.driver ? nameOf(v.driver) : '—') : (v.gunner && v.gunner !== myId ? nameOf(v.gunner) : 'ВЫ САМИ')); }
   else if (v.type === 'jeep') { set(2, 'ПРИЦЕЛ', aimHit ? Math.round(aimHit.t) + ' м' : '—'); bar(3, 'ПУЛЕМЁТ', 1, '#9bdc6a'); bar(4, 'КОРПУС', k, '#9aa39a'); set(5, 'КЛИК', 'ОГОНЬ'); }
-  else if (v.type === 'plane') { set(2, 'ВЫСОТА', Math.round(v.pos.y - Math.max(0, H(v.pos.x, v.pos.z))) + ' м'); bar(3, 'ТЯГА', v.thr, '#8fc3e8'); bar(4, 'РАКЕТЫ ' + v.rk + ' · ПКМ', v.rk / 8, '#ffb03a'); set(5, 'БОМБЫ · ПРОБЕЛ', v.bombs + ' / 3'); }
+  else if (v.type === 'plane') { set(2, 'ВЫСОТА', Math.round(v.pos.y - Math.max(0, H(v.pos.x, v.pos.z))) + ' м'); bar(3, 'ТЯГА', v.thr, '#8fc3e8'); bar(4, 'РАКЕТЫ ' + v.rk + ' · ПКМ', v.rk / 16, '#ffb03a'); set(5, 'БОМБЫ · ПРОБЕЛ', v.bombs + ' / 3'); }
   else if (v.type === 'icbm') { set(2, 'РАКЕТЫ', v.icbms + ' / 2'); bar(3, 'ПОДЪЁМ', v.erect, '#ffb03a'); bar(4, 'ПЕРЕЗАРЯДКА', 1 - v.mload / 90, v.mload > 0 ? '#e3a53c' : '#9bdc6a'); set(5, 'ПКМ', v.tmode ? 'ОТМЕНА' : 'НАВЕДЕНИЕ'); }
   else if (v.type === 'drone') { set(2, 'БАТАРЕЯ', Math.max(0, Math.ceil(v.bat)) + ' с'); bar(3, 'ТЯГА', v.thr, '#8fc3e8'); bar(4, 'ЗАРЯД', v.bat / 100, '#9bdc6a'); set(5, 'УДАР', 'ВЗРЫВ'); }
   else if (v.type === 'soldier') { set(1, 'КМ/Ч', Math.round((v.f2 || 0) * 3.6)); set(2, 'ПАТРОНЫ', akReload > 0 ? '…' : akMag + ' / 30'); bar(3, akReload > 0 ? 'ПЕРЕЗАРЯДКА' : 'АК-47 · R', akReload > 0 ? 1 - akReload / 2.3 : akMag / 30, akReload > 0 ? '#e3a53c' : '#9bdc6a'); bar(4, 'ЗДОРОВЬЕ', k, '#c9432f'); set(5, 'SHIFT · ПКМ', 'БЕГ · ПРИЦЕЛ'); }
