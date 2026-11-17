@@ -2522,7 +2522,7 @@ function applyState(v, s, snap) {
 function stateOf(v) {
   return [+v.pos.x.toFixed(2), +v.pos.y.toFixed(2), +v.pos.z.toFixed(2), +v.h.toFixed(3), +v.p.toFixed(3), +v.r.toFixed(3), +v.speed.toFixed(1), +v.aimYaw.toFixed(3), +v.aimPitch.toFixed(3), v.f1, v.f2, v.bombs, v.rk];
 }
-socket.on('st', (vid, s) => { const v = vehicles.get(vid); if (v && (vid !== myVid || mySeat === 1)) applyState(v, s, false); });
+socket.on('st', (vid, s) => { const v = vehicles.get(vid); if (v && (vid !== myVid || mySeat === 1) && !isAuto(v)) applyState(v, s, false); });
 socket.on('gst', (vid, s) => { const v = vehicles.get(vid); if (v && !(vid === myVid && mySeat === 1)) { v.aimYaw = s[0]; v.aimPitch = s[1]; v.f1 = s[2]; } });
 function updateRemote(v, dt, now) {
   if (!v.alive || v.dead) return;
@@ -2608,6 +2608,7 @@ function syncVehicles() {
     let v = vehicles.get(d.vid);
     if (!v) { v = makeVehicle(d); continue; }
     v.hp = d.hp; v.max = d.max; v.driver = d.driver; v.gunner = d.gunner || null; v.spent = !!d.spent;
+    if (v.auto !== (d.auto || null)) { v.auto = d.auto || null; v.ai = null; }
     if (v.type === 'icbm' && d.ammo != null) v.icbms = Math.min(v.icbms, d.ammo);
     if (!d.alive && v.alive && !v.dead) { v.alive = false; v.vis.g.visible = false; }
     if (d.alive && !v.alive && !v.dead) { resetVehicle(v, d); if (d.st) applyState(v, d.st, true); }
@@ -2948,8 +2949,9 @@ function icbmImpact(s) {
 function fireShot(k, o, dir, extra = {}) {
   const vel = dir.clone().multiplyScalar(SPEC[k].speed);
   if (extra.inherit) vel.add(extra.inherit);
-  spawnShot(k, o, vel, true, myVid, Object.assign(extra.target ? { target: extra.target.clone() } : {}, extra.tv ? { tv: extra.tv } : {}));
-  socket.emit('shot', { k, vid: myVid, o: [+o.x.toFixed(2), +o.y.toFixed(2), +o.z.toFixed(2)], v: [+vel.x.toFixed(1), +vel.y.toFixed(1), +vel.z.toFixed(1)], t: extra.target ? [+extra.target.x.toFixed(1), +extra.target.y.toFixed(1), +extra.target.z.toFixed(1)] : null, tv: extra.tv || null });
+  const owner = extra.owner || myVid;
+  spawnShot(k, o, vel, true, owner, Object.assign(extra.target ? { target: extra.target.clone() } : {}, extra.tv ? { tv: extra.tv } : {}));
+  socket.emit('shot', { k, vid: owner, o: [+o.x.toFixed(2), +o.y.toFixed(2), +o.z.toFixed(2)], v: [+vel.x.toFixed(1), +vel.y.toFixed(1), +vel.z.toFixed(1)], t: extra.target ? [+extra.target.x.toFixed(1), +extra.target.y.toFixed(1), +extra.target.z.toFixed(1)] : null, tv: extra.tv || null });
 }
 function clearShots() { for (const s of shots) scene.remove(s.mesh); shots.length = 0; for (const m of sams) scene.remove(m.mesh); sams.length = 0; }
 
@@ -3055,6 +3057,7 @@ addEventListener('keydown', e => {
   const v = myVehicle();
   if (mode === 'drive' && v && v.alive) {
     if (e.code === 'KeyX') leaveVehicle(true);
+    if (e.code === 'KeyP' && v.skin === 'l9' && !mySeat) autopilotOn(v);
     if ((e.code === 'ShiftLeft' || e.code === 'ShiftRight') && v.type === 'tank') sniper = !sniper;
     if (v.type === 'ship') {
       if (e.code === 'KeyW' || e.code === 'ArrowUp') v.tel = Math.min(SHIP_TEL.length - 1, v.tel + 1);
@@ -3703,6 +3706,161 @@ function updateMe(dt, now) {
   sendT -= dt;
   if (sendT <= 0) { sendT = 0.05; socket.emit('st', stateOf(v)); }
 }
+// ═══════════ AUTOPILOT (Li L9) ═══════════
+// P in the L9: the car drives itself along the road to the far back of the enemy base, hides next to the houses there
+// and waits. On the way it hunts enemy machines it sees (not ships, not jets in the air, not ones inside their base),
+// destroys them with the roof machine gun and carries on. The player who switched it on runs it from his own browser;
+// anyone of the team can climb in at any moment and take over.
+const AUTO_CRUISE = 25, AUTO_SEE = 230, AUTO_LOSE = 330;
+const isAuto = v => !!v && v.auto === myId && v.alive && !v.dead && v.vid !== myVid;
+function autopilotOn(v) {
+  if (!v || v.skin !== 'l9' || !v.alive) return;
+  socket.emit('autopilot', v.vid);
+  v.auto = myId; v.ai = null;
+  logMsg('<b>Li L9</b> — автопилот: едет в тыл вражеской базы');
+  centerMsg('АВТОПИЛОТ', 'машина едет сама — кликните на неё, чтобы снова взять управление', 2500, '#9bff7a');
+  leaveVehicle(true);
+}
+// where to hide: beside the house block deepest in the enemy base
+function autoHideSpot(team) {
+  const e = 1 - team, B = BASES[e], back = Math.sign(B.x);
+  let best = null;
+  if (world.towns) for (const pc of world.towns.pieces) {
+    const p = pc.lod.position;
+    if (Math.hypot(p.x - B.x, p.z - B.z) > BASE_R + 60) continue;
+    if (!best || p.x * back > best.x * back) best = p;
+  }
+  const c = best ? { x: best.x, z: best.z } : { x: B.x + back * BASE_R * 0.75, z: B.z };
+  // a free patch of ground next to it, on the far side
+  let pick = null, score = -1e9;
+  for (let k = 0; k < 48; k++) {
+    const a = k / 48 * TAU, r = 22 + (k % 3) * 12, x = c.x + Math.cos(a) * r, z = c.z + Math.sin(a) * r;
+    if (Math.abs(H(x, z) - BASE_Y) > 1.5 || Math.hypot(x - B.x, z - B.z) > BASE_R + 40 || blocked(x, z, 4, {}) || Math.abs(x) > MAP_X - 60) continue;   // flat base ground, beside the houses
+    const s = x * back - Math.abs(z - c.z) * 0.3;
+    if (s > score) { score = s; pick = { x, z }; }
+  }
+  return pick || c;
+}
+function autoRoute(v) {
+  const dest = autoHideSpot(v.team), pts = [];
+  const dir = Math.sign(dest.x - v.pos.x) || 1;
+  // join the road, follow it to the edge of the enemy base, then go across to the hiding place
+  const endX = BASES[1 - v.team].x - Math.sign(BASES[1 - v.team].x) * (BASE_R - 40);
+  for (let x = v.pos.x + dir * 40; (endX - x) * dir > 0; x += dir * 70) pts.push({ x, z: roadZ(x) });
+  pts.push({ x: endX, z: roadZ(endX) });
+  pts.push(dest);
+  return { pts, i: 0, dest, mode: 'go', stuckT: 0, revT: 0, revS: 1, lastPos: v.pos.clone(), checkT: 0, scanT: 0, target: null, losT: 0, sendT: 0, fireT: 0 };
+}
+const autoFree = (x, z, v) => H(x, z) > -1.0 && !blocked(x, z, 1.6, v);
+function autoDrive(v, dt) {
+  if (!v.ai) v.ai = autoRoute(v);
+  const ai = v.ai, e = 1 - v.team, EB = BASES[e];
+  const inEnemyBase = (x, z, m) => Math.hypot(x - EB.x, z - EB.z) < BASE_R + m;
+  // ── look for something to hunt
+  ai.scanT -= dt;
+  if (ai.scanT <= 0) {
+    ai.scanT = 0.4;
+    if (ai.target && (!ai.target.alive || ai.target.dead || ai.target.pos.distanceTo(v.pos) > AUTO_LOSE || inEnemyBase(ai.target.pos.x, ai.target.pos.z, 120))) ai.target = null;
+    if (!ai.target && ai.mode !== 'park' && !inEnemyBase(v.pos.x, v.pos.z, 260)) {
+      let best = null, bd = AUTO_SEE;
+      for (const o of vehicles.values()) {
+        if (o.team === v.team || !o.alive || o.dead || o.type === 'ship' || (o.type === 'plane' && o.air) || o.type === 'drone' && o.air) continue;
+        if (inEnemyBase(o.pos.x, o.pos.z, 120)) continue;            // the ones in their base: leave them, sneak past
+        const d = o.pos.distanceTo(v.pos); if (d > bd || !autoSees(v, o)) continue;
+        best = o; bd = d;
+      }
+      if (best) { ai.target = best; ai.losT = 0; }
+    }
+  }
+  // ── where to go
+  let gx, gz, cruise = AUTO_CRUISE, stopAt = 0;
+  const t = ai.target;
+  if (t) { gx = t.pos.x; gz = t.pos.z; stopAt = 55; cruise = 18; }
+  else {
+    let wp = ai.pts[ai.i];
+    while (wp && Math.hypot(wp.x - v.pos.x, wp.z - v.pos.z) < (ai.i === ai.pts.length - 1 ? 6 : 28)) { ai.i++; ai.stuckN = 0; wp = ai.pts[ai.i]; }
+    if (!wp) { ai.mode = 'park'; }
+    else { gx = wp.x; gz = wp.z; if (ai.i === ai.pts.length - 1) { cruise = 12; } if (inEnemyBase(v.pos.x, v.pos.z, 80)) cruise = Math.min(cruise, 12); }   // creep through the base
+  }
+  // ── steering towards the goal, around obstacles and water
+  let thr = 0, steer = 0;
+  if (ai.mode !== 'park' && gx !== undefined) {
+    const dist = Math.hypot(gx - v.pos.x, gz - v.pos.z);
+    let want = Math.atan2(gx - v.pos.x, gz - v.pos.z);
+    const probe = (a, d) => autoFree(v.pos.x + Math.sin(a) * d, v.pos.z + Math.cos(a) * d, v);
+    if (!probe(want, 9) || !probe(want, 18)) {
+      for (const da of [0.35, -0.35, 0.7, -0.7, 1.1, -1.1, 1.6, -1.6]) if (probe(want + da, 9) && probe(want + da, 16)) { want += da; break; }
+    }
+    const err = wrap(want - v.h);
+    steer = Math.max(-1, Math.min(1, err * 2.2));
+    const sharp = Math.abs(err) > 0.7 ? 8 : Math.abs(err) > 0.35 ? 15 : cruise;
+    const tgt = Math.min(cruise, sharp, stopAt ? Math.max(0, (dist - stopAt) * 0.5) : Math.max(4, dist * 0.6));
+    thr = v.speed < tgt - 0.5 ? 1 : v.speed > tgt + 1.5 ? -1 : 0;
+    // stuck? back up turning the other way for a moment
+    ai.checkT += dt;
+    if (ai.checkT > 1.5) { if (ai.revT <= 0 && thr > 0 && ai.lastPos.distanceTo(v.pos) < 1.5) {
+      ai.revT = 1.8; ai.revS = -Math.sign(steer || 1); ai.stuckN = (ai.stuckN || 0) + 1;
+      // can't get through: close to the hiding place is close enough; elsewhere skip this waypoint
+      if (!t && Math.hypot(ai.dest.x - v.pos.x, ai.dest.z - v.pos.z) < 70) { ai.i = ai.pts.length; ai.revT = 0; }
+      else if (!t && ai.stuckN >= 4 && ai.i < ai.pts.length - 1) { ai.i++; ai.stuckN = 0; }
+    } ai.lastPos.copy(v.pos); ai.checkT = 0; }
+    if (ai.revT > 0) { ai.revT -= dt; thr = -1; steer = ai.revS; }
+  } else thr = v.speed > 0.5 ? -1 : 0;
+  autoPhysics(v, dt, thr, steer);
+  // ── machine gun
+  if (t) autoShoot(v, t, dt); else { v.f1 = 0; v.aimYaw = wrap(v.aimYaw + Math.max(-2 * dt, Math.min(2 * dt, wrap(v.h - v.aimYaw)))); v.aimPitch *= 0.9; }
+  updateVis(v, dt);
+  ai.sendT -= dt;
+  if (ai.sendT <= 0) { ai.sendT = ai.mode === 'park' && !t ? 0.5 : 0.08; socket.emit('ast', v.vid, stateOf(v)); }
+}
+function autoSees(v, o) {
+  const a = [v.pos.x, v.pos.y + 2.2, v.pos.z], d = [o.pos.x - a[0], o.pos.y + 1.2 - a[1], o.pos.z - a[2]];
+  const L = Math.hypot(d[0], d[1], d[2]); if (L < 1) return true;
+  d[0] /= L; d[1] /= L; d[2] /= L;
+  const h = castRay(a, d, L, v.vid, { step: 6 });
+  return !h || (h.kind === 'veh' && h.v === o) || h.t > L - 3;
+}
+function autoPhysics(v, dt, thr, steer) {
+  const maxF = 33.3, maxR = 10, acc = 11;
+  const target = thr > 0 ? maxF : thr < 0 ? -maxR : 0;
+  v.speed += Math.max(-acc * 1.5 * dt, Math.min(acc * dt, target - v.speed));
+  const L = 3.0, maxD = 0.6 / (1 + Math.abs(v.speed) / 45);
+  v.steerA = (v.steerA || 0) + (steer * maxD - (v.steerA || 0)) * Math.min(1, dt * 9);
+  const cap = 24 / Math.max(6, Math.abs(v.speed));
+  const turn = Math.max(-cap, Math.min(cap, v.speed / L * Math.tan(v.steerA)));
+  v.f2 = +v.steerA.toFixed(2);
+  const nh = wrap(v.h + turn * dt);
+  const nx = v.pos.x + Math.sin(nh) * v.speed * dt, nz = v.pos.z + Math.cos(nh) * v.speed * dt;
+  if (H(nx, nz) < -1.4) { v.speed = 0; v.h = nh; }
+  else if (blocked(nx, nz, 1.4, v)) { v.speed *= -0.2; v.h = nh; }
+  else { v.pos.x = nx; v.pos.z = nz; v.h = nh; }
+  const gf = groundFollow(v, v.pos.x, v.pos.z, 1.45, 1.1);
+  v.p += (gf.p - v.p) * Math.min(1, dt * 8); v.r += (gf.r - v.r) * Math.min(1, dt * 8);
+  v.pos.y = restY(gf, v.p, v.r);
+  v.tpos.copy(v.pos); v.th = v.h;
+}
+function autoShoot(v, t, dt) {
+  const ai = v.ai, tp = _v3.set(v.pos.x, v.pos.y + 2.2, v.pos.z);
+  const dist = Math.hypot(t.pos.x - tp.x, t.pos.z - tp.z), lead = dist / SPEC.mg.speed;
+  const ax = t.pos.x + Math.sin(t.h) * (t.speed || 0) * lead, az = t.pos.z + Math.cos(t.h) * (t.speed || 0) * lead;
+  const want = Math.atan2(ax - tp.x, az - tp.z);
+  v.aimYaw = wrap(v.aimYaw + Math.max(-3.5 * dt, Math.min(3.5 * dt, wrap(want - v.aimYaw))));
+  const el = Math.atan2(t.pos.y + 1.2 - tp.y, dist) + 0.5 * GRAV * 0.3 * dist / (SPEC.mg.speed * SPEC.mg.speed);
+  v.aimPitch += (Math.max(-0.2, Math.min(0.9, el)) - v.aimPitch) * Math.min(1, dt * 12);
+  ai.losT += dt;
+  if (ai.losT > 0.5) { ai.losT = 0; ai.los = autoSees(v, t); if (!ai.los) ai.blindT = (ai.blindT || 0) + 0.5; else ai.blindT = 0; if (ai.blindT > 4) { ai.target = null; v.f1 = 0; return; } }
+  v.f1 = ai.los !== false && Math.abs(wrap(want - v.aimYaw)) < 0.06 && dist < AUTO_SEE + 40 ? 1 : 0;
+  if (!v.f1) { v.fireAcc = Math.min(v.fireAcc, 0.09); return; }
+  v.fireAcc += dt;
+  while (v.fireAcc > 0.09) {
+    v.fireAcc -= 0.09;
+    v.vis.g.updateMatrixWorld(true);
+    const o = v.vis.tip.getWorldPosition(new THREE.Vector3());
+    const dir = fwd(v.aimYaw + (Math.random() - .5) * 0.02, v.aimPitch + (Math.random() - .5) * 0.02, new THREE.Vector3());
+    fireShot('mg', o, dir, { owner: v.vid });
+    particles.mgflash(o, dir); if (Math.random() < 0.5) audio.at('shoot', o, 0.3, 1.9, 600);
+  }
+}
 
 // ═══════════ COMMANDER VIEW ═══════════
 const cmd = { x: -1200, z: 60, h: 520, tx: -1200, tz: 60, th: 520 };
@@ -3766,6 +3924,7 @@ function updateCmd(dt) {
   } else { tip.style.display = 'none'; canvas.style.cursor = cmdDrag ? 'grabbing' : 'default'; }
 }
 const myTeam = () => { const p = me(); return p ? p.team : 0; };
+const typeName = v => v.skin === 'l9' ? 'Li L9' : TYPE_NAME[v.type];
 const vName = v => v.skin === 'l9' ? 'Li L9' : TYPE_NAME[v.type] + ' ' + v.n;
 // can I get in? (a motorcycle also has the gunner's seat in its sidecar)
 const seatFree = v => !v.driver || v.driver === myId || (v.type === 'moto' && (!v.gunner || v.gunner === myId));
@@ -3782,7 +3941,7 @@ function takeControl(v, seat) {
   _camFrom.copy(camera.position); _camFromQ.copy(camera.quaternion);
   mySeat = seat ? 1 : 0;
   myVid = v.vid; mode = 'drive'; v.crashSent = false;
-  if (mySeat) v.gunner = myId; else { v.driver = myId; if (v.gunner === myId) v.gunner = null; v.tpos.copy(v.pos); }
+  if (mySeat) v.gunner = myId; else { v.driver = myId; v.auto = null; v.ai = null; if (v.gunner === myId) v.gunner = null; v.tpos.copy(v.pos); }
   if (v.type === 'ship') v.tel = 1;
   if (v.type === 'plane') v.thr = 0;
   resetWeaponsFor(v.type);
@@ -3790,7 +3949,7 @@ function takeControl(v, seat) {
   camTrans = 1; camTransAt = performance.now(); sniper = false;
   document.body.classList.remove('cmdv');
   $('cmdtip').style.display = 'none'; canvas.style.cursor = '';
-  centerMsg(vName(v).toUpperCase() + (mySeat ? ' · СТРЕЛОК' : ''), mySeat ? 'Мышь — прицел · клик — огонь · колесо вниз — выйти' : v.type === 'moto' ? 'WASD — ехать · мышь и клик — пулемёт · второй игрок может сесть стрелком' : v.type === 'plane' ? 'W — тяга · разгон и мышь вверх' : v.type === 'gunner' ? 'Мышь — прицел · клик — огонь · колесо вниз — выйти' : v.type === 'icbm' ? 'WASD — ехать · остановитесь и ПКМ — наведение ракеты' : v.type === 'drone' ? 'W — взлёт · летит за мышью · взрывается при ударе' : v.type === 'soldier' ? 'WASD — идти · Shift — бег · клик — огонь · ПКМ — прицел · R — перезарядка' : 'Колесо вниз — наверх, к выбору техники', 1500);
+  centerMsg(vName(v).toUpperCase() + (mySeat ? ' · СТРЕЛОК' : ''), mySeat ? 'Мышь — прицел · клик — огонь · колесо вниз — выйти' : v.skin === 'l9' ? 'WASD — ехать · мышь и клик — пулемёт · P — автопилот в тыл врага' : v.type === 'moto' ? 'WASD — ехать · мышь и клик — пулемёт · второй игрок может сесть стрелком' : v.type === 'plane' ? 'W — тяга · разгон и мышь вверх' : v.type === 'gunner' ? 'Мышь — прицел · клик — огонь · колесо вниз — выйти' : v.type === 'icbm' ? 'WASD — ехать · остановитесь и ПКМ — наведение ракеты' : v.type === 'drone' ? 'W — взлёт · летит за мышью · взрывается при ударе' : v.type === 'soldier' ? 'WASD — идти · Shift — бег · клик — огонь · ПКМ — прицел · R — перезарядка' : 'Колесо вниз — наверх, к выбору техники', 1500);
   lockPointer();
 }
 function leaveVehicle(force) {
@@ -3817,9 +3976,9 @@ function renderCmdList() {
   const team = myTeam();
   const rows = room.vehicles.filter(d => d.team === team).map(d => {
     const v = vehicles.get(d.vid);
-    const st = !d.alive ? 'уничтожен' : d.spent ? 'ракет нет · вне игры' : d.driver ? (d.driver === myId ? 'вы' : nameOf(d.driver)) : 'свободен';
+    const st = !d.alive ? 'уничтожен' : d.spent ? 'ракет нет · вне игры' : d.auto ? 'автопилот' + (d.auto === myId ? '' : ' · ' + nameOf(d.auto)) : d.driver ? (d.driver === myId ? 'вы' : nameOf(d.driver)) : 'свободен';
     const off = !d.alive || !seatFree(d);
-    return `<div class="vr ${off ? 'off' : ''} ${d.driver === myId ? 'mine' : ''}" data-v="${d.vid}"><span class="ic">${TYPE_ICON[d.type]}</span><span class="nm">${TYPE_NAME[d.type]} ${d.n}<br><span class="st">${st}</span></span><span class="hb"><i style="width:${Math.round(d.hp / d.max * 100)}%"></i></span></div>`;
+    return `<div class="vr ${off ? 'off' : ''} ${d.driver === myId ? 'mine' : ''}" data-v="${d.vid}"><span class="ic">${TYPE_ICON[d.type]}</span><span class="nm">${vName(d)}<br><span class="st">${st}</span></span><span class="hb"><i style="width:${Math.round(d.hp / d.max * 100)}%"></i></span></div>`;
   }).join('');
   $('cmdlist').innerHTML = rows;
   $('cmdlist').querySelectorAll('.vr').forEach(el => {
@@ -4023,7 +4182,7 @@ function drawCmdHud(c, w, h, now) {
     // hp arc
     c.lineWidth = 3; c.strokeStyle = v.hp / v.max > .5 ? '#9bcf5a' : v.hp / v.max > .25 ? '#e3a53c' : '#e0503f';
     c.beginPath(); c.arc(p[0], p[1], r + 4, -Math.PI / 2, -Math.PI / 2 + TAU * v.hp / v.max); c.stroke();
-    if (mine) { c.font = '700 9px Unbounded'; c.fillStyle = v.driver ? '#cfd5cc' : '#f3f1e8'; c.fillText(v.driver ? (v.driver === myId ? 'ВЫ' : nameOf(v.driver)) : TYPE_NAME[v.type].toUpperCase() + ' ' + v.n, p[0], p[1] + r + 16); }
+    if (mine) { c.font = '700 9px Unbounded'; c.fillStyle = v.driver ? '#cfd5cc' : '#f3f1e8'; c.fillText(v.driver ? (v.driver === myId ? 'ВЫ' : nameOf(v.driver)) : v.auto ? 'АВТОПИЛОТ' : vName(v).toUpperCase(), p[0], p[1] + r + 16); }
   }
   // own repair hangar
   if (world.hangars) for (const hg of world.hangars) {
@@ -4061,7 +4220,7 @@ let aimedVid = null, aimedT = 0;
 const heatView = () => { const v = myVehicle(); return !!v && v.type === 'plane'; };
 // an enemy machine someone is in right now, within 500 m of the machine I'm in: shown on screen and on the minimap
 const ENEMY_NEAR = 500;
-const enemyNear = o => { const v = myVehicle(); return !!v && !!(o.driver || o.gunner) && o.pos.distanceTo(v.pos) <= ENEMY_NEAR; };
+const enemyNear = o => { const v = myVehicle(); return !!v && !!(o.driver || o.gunner || o.auto) && o.pos.distanceTo(v.pos) <= ENEMY_NEAR; };
 function updateMarkers() {
   const v = myVehicle(), heat = heatView(), now = performance.now();
   if (aimHit && aimHit.kind === 'veh' && aimHit.v.alive && aimHit.v.team !== myTeam()) { aimedVid = aimHit.v.vid; aimedT = now; }
@@ -4086,7 +4245,7 @@ function updateMarkers() {
     if (!p) { mk.style.display = 'none'; continue; }
     mk.style.display = 'block'; mk.className = 'mk ' + (enemy ? 'en' : 'al') + (edge ? ' edge' : '');
     mk.style.left = p[0] + 'px'; mk.style.top = p[1] + 'px';
-    mk.firstChild.textContent = (o.driver ? nameOf(o.driver) + ' · ' : '') + TYPE_NAME[o.type] + (dist > 150 || enemy ? ' · ' + Math.round(dist) + ' м' : '');
+    mk.firstChild.textContent = (o.driver ? nameOf(o.driver) + ' · ' : '') + typeName(o) + (o.auto ? ' · авто' : '') + (dist > 150 || enemy ? ' · ' + Math.round(dist) + ' м' : '');
     mk.querySelector('i').style.width = Math.round(o.hp / o.max * 100) + '%';
   }
 }
@@ -4367,7 +4526,7 @@ function frame(now) {
   waterUniforms.uTime.value = now / 1000;
   updateBaseAlarm(now);
   if (inGame && world) {
-    for (const v of vehicles.values()) if (v.vid !== myVid || mySeat === 1) updateRemote(v, dt, now);
+    for (const v of vehicles.values()) { if (isAuto(v)) autoDrive(v, dt); else if (v.vid !== myVid || mySeat === 1) updateRemote(v, dt, now); }
     if (mode === 'drive') { const v = myVehicle(); if (v && v.alive) updateAim(v); }
     updateMe(dt, now);
     for (const v of vehicles.values()) {

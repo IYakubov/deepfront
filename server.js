@@ -73,7 +73,7 @@ function publicRoom(r) {
     code: r.code, hostId: r.hostId, state: r.state, mode: 'team', seed: r.seed, tickets: r.tickets,
     timeLeft: r.endsAt && r.state === 'playing' ? Math.max(0, r.endsAt - Date.now()) : null,
     players: [...r.players.values()].map(p => ({ id: p.id, name: p.name, team: p.team, vid: p.vid, kills: p.kills, deaths: p.deaths, dmg: Math.round(p.dmg) })),
-    vehicles: r.vehicles.map(v => ({ vid: v.vid, team: v.team, type: v.type, skin: v.skin || null, n: v.n, hp: v.hp, max: v.max, alive: v.alive, ammo: v.ammo, spent: v.spent, driver: v.driver, gunner: v.gunner || null, spawn: v.spawn, st: v.st, })),
+    vehicles: r.vehicles.map(v => ({ vid: v.vid, team: v.team, type: v.type, skin: v.skin || null, n: v.n, hp: v.hp, max: v.max, alive: v.alive, ammo: v.ammo, spent: v.spent, driver: v.driver, gunner: v.gunner || null, auto: v.auto || null, spawn: v.spawn, st: v.st, })),
     hangars: (r.hangars || []).map(h => ({ team: h.team, hp: h.hp, max: h.max, busy: h.busy, prog: h.prog })),
   };
 }
@@ -154,7 +154,7 @@ function destroyVehicle(r, v, by, how) {
   if ((!killer || killer.team === v.team) && v.lastHitBy && Date.now() - v.lastHitAt < 15000) killer = r.players.get(v.lastHitBy);
   if (killer && killer.team !== v.team) killer.kills++;
   io.to(r.code).emit('vdead', { vid: v.vid, by: killer ? killer.id : null, driver: v.driver, gunner: v.gunner || null, how: how || '' });
-  v.driver = null; v.gunner = null;
+  v.driver = null; v.gunner = null; v.auto = null;
   broadcastRoom(r);
   if (r.tickets[v.team] <= 0) setTimeout(() => endMatch(r), 1500);
 }
@@ -236,7 +236,7 @@ io.on('connection', socket => {
       seat = 1;
     }
     const old = myVehicle(); if (old && old !== v) leaveSeat(old);
-    if (seat) v.gunner = p.id; else { if (v.gunner === p.id) { v.gunner = null; v.gst = null; } v.driver = p.id; }
+    if (seat) v.gunner = p.id; else { if (v.gunner === p.id) { v.gunner = null; v.gst = null; } v.driver = p.id; v.auto = null; }   // taking over an autopilot car
     p.vid = v.vid;
     cb && cb({ ok: true, st: v.st, seat });
     broadcastRoom(room);
@@ -254,6 +254,20 @@ io.on('connection', socket => {
     if (!v || !v.alive || !Array.isArray(s) || v.driver !== socket.id) return;
     v.st = s.slice(0, 13);
     if (v.gunner && v.gst) { v.st[7] = v.gst[0]; v.st[8] = v.gst[1]; v.st[9] = v.gst[2]; }   // the gunner aims and fires
+    socket.to(room.code).volatile.emit('st', v.vid, v.st);
+  });
+  // autopilot: the driver hands the car to his own browser, which drives it and reports its state
+  socket.on('autopilot', vid => {
+    const p = me(), v = myVehicle();
+    if (!p || !v || v.vid !== vid || !v.alive || v.driver !== socket.id || v.skin !== 'l9') return;
+    v.auto = socket.id; v.driver = null; p.vid = null;
+    broadcastRoom(room);
+  });
+  socket.on('ast', (vid, s) => {
+    if (!room || !Array.isArray(s)) return;
+    const v = room.vehicles.find(x => x.vid === vid);
+    if (!v || !v.alive || v.auto !== socket.id) return;
+    v.st = s.slice(0, 13);
     socket.to(room.code).volatile.emit('st', v.vid, v.st);
   });
   // motorcycle gunner: where the machine gun points and whether it fires
@@ -337,6 +351,7 @@ io.on('connection', socket => {
     if (!room) return;
     const r = room, p = me();
     leaveSeat(myVehicle());
+    for (const v of r.vehicles) if (v.auto === socket.id) v.auto = null;   // the car stops where it is
     r.players.delete(socket.id);
     if (r.players.size === 0) { clearInterval(r.tick); rooms.delete(r.code); return; }
     if (r.hostId === socket.id) r.hostId = r.players.keys().next().value;
