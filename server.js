@@ -24,7 +24,7 @@ const PORT = process.env.PORT || 3000;
 const MAX_PLAYERS = 16;
 const MATCH_TIME = 60 * 60;      // safety cap, seconds; normally a match ends when one side has no machines left
 const HP = { tank: 120, jeep: 50, plane: 70, ship: 260, gunner: 40, icbm: 90, drone: 8, soldier: 30, moto: 35 };
-const MACHINES = 14;             // per team; machine-gun posts, drones and foot soldiers don't count
+const MACHINES = 15;             // per team; machine-gun posts, drones and foot soldiers don't count
 const NOT_MACHINE = new Set(['gunner', 'drone', 'soldier']);
 const PFX = { soldier: 'a' };     // vid prefix (ship already uses 's')
 // repair hangar per base (team 0; team 1 mirrored in x): one machine at a time, 60 s, can be destroyed
@@ -36,6 +36,7 @@ const LAYOUT = [
   ['tank', -1110, -10, Math.PI / 2], ['tank', -1110, 25, Math.PI / 2], ['tank', -1110, 60, Math.PI / 2],
   ['tank', -1070, 5, Math.PI / 2], ['tank', -1070, 45, Math.PI / 2],
   ['jeep', -1170, 150, Math.PI / 2], ['jeep', -1150, 165, Math.PI / 2], ['jeep', -1130, 180, Math.PI / 2],
+  ['jeep', -1110, 200, Math.PI / 2, 'l9'],              // Li Auto L9 with a roof machine gun
   ['plane', -1430, -262, Math.PI / 2], ['plane', -1395, -238, Math.PI / 2],
   ['ship', -1260, 560, 0.25], ['ship', -1150, 590, 0.25],
   ['drone', -1185, 14, Math.PI / 2], ['drone', -1185, 22, Math.PI / 2],
@@ -58,10 +59,11 @@ function makeVehicles() {
   const vs = [];
   for (const team of [0, 1]) {
     const count = {};
-    for (const [type, x, z, yaw] of LAYOUT) {
-      count[type] = (count[type] || 0) + 1;
+    for (const [type, x, z, yaw, skin] of LAYOUT) {
+      const ck = skin || type;
+      count[ck] = (count[ck] || 0) + 1;
       const sp = team === 0 ? { x, z, yaw } : { x: -x, z, yaw: -yaw };
-      vs.push({ vid: `${team}${PFX[type] || type[0]}${count[type]}`, team, type, n: count[type], hp: HP[type], max: HP[type], alive: true, driver: null, ammo: type === 'icbm' ? 2 : 0, spent: false, spawn: sp, st: null, respawnAt: 0, lastHitBy: null, lastHitAt: 0 });
+      vs.push({ vid: `${team}${skin ? 'l' : PFX[type] || type[0]}${count[ck]}`, team, type, skin: skin || null, n: count[ck], hp: HP[type], max: HP[type], alive: true, driver: null, ammo: type === 'icbm' ? 2 : 0, spent: false, spawn: sp, st: null, respawnAt: 0, lastHitBy: null, lastHitAt: 0 });
     }
   }
   return vs;
@@ -71,7 +73,7 @@ function publicRoom(r) {
     code: r.code, hostId: r.hostId, state: r.state, mode: 'team', seed: r.seed, tickets: r.tickets,
     timeLeft: r.endsAt && r.state === 'playing' ? Math.max(0, r.endsAt - Date.now()) : null,
     players: [...r.players.values()].map(p => ({ id: p.id, name: p.name, team: p.team, vid: p.vid, kills: p.kills, deaths: p.deaths, dmg: Math.round(p.dmg) })),
-    vehicles: r.vehicles.map(v => ({ vid: v.vid, team: v.team, type: v.type, n: v.n, hp: v.hp, max: v.max, alive: v.alive, ammo: v.ammo, spent: v.spent, driver: v.driver, gunner: v.gunner || null, spawn: v.spawn, st: v.st, })),
+    vehicles: r.vehicles.map(v => ({ vid: v.vid, team: v.team, type: v.type, skin: v.skin || null, n: v.n, hp: v.hp, max: v.max, alive: v.alive, ammo: v.ammo, spent: v.spent, driver: v.driver, gunner: v.gunner || null, spawn: v.spawn, st: v.st, })),
     hangars: (r.hangars || []).map(h => ({ team: h.team, hp: h.hp, max: h.max, busy: h.busy, prog: h.prog })),
   };
 }

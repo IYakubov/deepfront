@@ -21,13 +21,13 @@ const PORT = [{ x: -1200, z: 520 }, { x: 1200, z: 520 }];
 const SAMS = [[-1010, -110], [-1300, 330], [-1450, -60]];   // team 0, team 1 mirrored
 const HP = { tank: 120, jeep: 50, plane: 70, ship: 260, gunner: 40, icbm: 90, drone: 8, soldier: 30, moto: 35 };
 const HANGAR = { x: -1195, z: -75, hx: 18, hz: 15 };   // repair hangar of team 0; team 1 mirrored in x
-const ASSET_V = '9';                                  // bump when models change (they are cached by the browser)
+const ASSET_V = '10';                                  // bump when models change (they are cached by the browser)
 const TYPE_NAME = { tank: 'Танк', jeep: 'Джип', plane: 'Самолёт', ship: 'Корабль', gunner: 'Пулемётчик', icbm: 'SS-27', drone: 'FPV-дрон', soldier: 'Солдат', moto: 'Мотоцикл' };
 const TYPE_ICON = { tank: '▣', jeep: '◆', plane: '✈', ship: '⛴', gunner: '☗', icbm: '⇪', drone: '✣', soldier: '✚', moto: '⚙' };
 const TEAM_COL = [0x6f7d40, 0x3f6283];
 const TEAM_CSS = ['#a9b86a', '#7fa6c9'];
 // collision / hit boxes in local space [hx, y0, y1, hz]
-const HITBOX = { tank: [1.7, 0, 2.7, 3.7], jeep: [1.35, 0.2, 2.6, 2.3], plane: [6.6, -1.2, 2.6, 9.5], ship: [3.2, -2, 10, 24], gunner: [1.7, 0, 2.2, 1.7], icbm: [2.05, 0, 4.3, 11], drone: [0.7, -0.35, 0.5, 0.7], soldier: [0.42, 0, 1.85, 0.42], moto: [1.05, 0, 1.7, 1.6] };
+const HITBOX = { tank: [1.7, 0, 2.7, 3.7], jeep: [1.35, 0.2, 2.6, 2.3], plane: [6.6, -1.2, 2.6, 9.5], ship: [3.2, -2, 10, 24], gunner: [1.7, 0, 2.2, 1.7], icbm: [2.05, 0, 4.3, 11], drone: [0.7, -0.35, 0.5, 0.7], soldier: [0.42, 0, 1.85, 0.42], moto: [1.05, 0, 1.7, 1.6], l9: [1.0, 0.15, 2.3, 2.6] };
 // damage per weapon against each vehicle type
 const DMG = {
   shell: { tank: 30, jeep: 45, plane: 45, ship: 24, gunner: 40, soldier: 60, moto: 45 },
@@ -869,7 +869,7 @@ function rayVehicle(o, d, v, maxT) {
   // into the vehicle's local frame
   _ro.set(o[0], o[1], o[2]).applyMatrix4(v.inv);
   _rd.set(d[0], d[1], d[2]).transformDirection(v.inv);
-  const hb = HITBOX[v.type];
+  const hb = HITBOX[v.skin || v.type] || HITBOX[v.type];
   const t = rayBox([_ro.x, _ro.y, _ro.z], [_rd.x, _rd.y, _rd.z], { x: 0, z: 0, hx: hb[0], hz: hb[3], y0: hb[1], y1: hb[2] });
   return t !== null && t <= maxT ? t : null;
 }
@@ -1516,7 +1516,7 @@ function whenModels(fn) { if (modelsDone) fn(); else modelWaiters.push(fn); }
 {
   const L = new GLTFLoader(); L.setMeshoptDecoder(MeshoptDecoder);
   const names = ['tank', 'jet', 'ship', 'jeep', 'drone', 'soldier', 'tree2', 'tank_lo', 'jet_lo', 'ship_lo', 'jeep_lo', 'drone_lo',
-    'country', 'country_lo', 'abandoned', 'abandoned_lo', 'moto', 'moto_lo'];
+    'country', 'country_lo', 'abandoned', 'abandoned_lo', 'moto', 'moto_lo', 'l9', 'l9_lo'];
   let left = names.length;
   const prog = Object.fromEntries(names.map(n => [n, 0]));
   const showProg = () => { const k = Object.values(prog).reduce((a, b) => a + b, 0) / names.length; loadingUI(k * 0.9, 'ЗАГРУЗКА ' + Math.round(k * 90) + '%'); };
@@ -1718,7 +1718,50 @@ function seatedSoldier(hip, thigh, shin, arms) {
   s.position.set(hip[0], hip[1] - 0.93, hip[2]);
   return s;
 }
+// Li Auto L9: the scan has a single plain material; paint it by part
+const L9_PART = (() => {
+  const m = {}, set = (cls, ids) => { for (const i of ids) m['L9' + String(i).padStart(3, '0')] = cls; };
+  set('wheel', [15, 16, 17, 18, 19, 20, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 56, 57, 76, 77, 108, 109]);
+  set('glass', [2, 11, 6, 41, 8, 43, 63, 80, 66, 103, 52, 62]);
+  set('trim', [3, 12, 93, 115, 96, 118, 82, 54, 55, 75, 102, 88, 71, 74]);
+  set('light', [105]);
+  return m;
+})();
+const l9Part = o => { const mm = /^(L9\d{3})/.exec(o.name) || /^(L9\d{3})/.exec(o.parent ? o.parent.name : ''); return (mm && L9_PART[mm[1]]) || 'body'; };
+function l9Paint(root) {
+  const M = {
+    body: new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: .78, metalness: .15 }),
+    wheel: new THREE.MeshStandardMaterial({ color: 0x1d1e1c, roughness: .85 }),
+    glass: new THREE.MeshStandardMaterial({ color: 0x1b2328, roughness: .12, metalness: .55 }),
+    trim: new THREE.MeshStandardMaterial({ color: 0x151615, roughness: .6, metalness: .3 }),
+    light: new THREE.MeshStandardMaterial({ color: 0xd8d4b8, emissive: 0x302a18, roughness: .3 }),
+  };
+  M.body.userData.camo = true;
+  for (const k in M) M[k].side = THREE.DoubleSide;
+  root.traverse(o => { if (o.isMesh) o.material = M[l9Part(o)]; });
+}
+// woodland camouflage painted in the shader from the model's own coordinates (no texture needed)
+function camo(m) {
+  m.onBeforeCompile = sh => {
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vCamo;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvCamo = (modelMatrix * vec4(position, 1.0)).xyz - (modelMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
+varying vec3 vCamo;
+float cHash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+float cNoise(vec3 p) { vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(cHash(i), cHash(i + vec3(1,0,0)), f.x), mix(cHash(i + vec3(0,1,0)), cHash(i + vec3(1,1,0)), f.x), f.y),
+             mix(mix(cHash(i + vec3(0,0,1)), cHash(i + vec3(1,0,1)), f.x), mix(cHash(i + vec3(0,1,1)), cHash(i + vec3(1,1,1)), f.x), f.y), f.z); }`)
+      .replace('#include <map_fragment>', `#include <map_fragment>
+{ vec3 q = vCamo * 1.1; float n = cNoise(q) * 0.6 + cNoise(q * 2.3 + 7.1) * 0.4; float n2 = cNoise(q * 1.7 + 19.3);
+  vec3 c = vec3(0.30, 0.33, 0.20);                                  // olive drab
+  c = mix(c, vec3(0.20, 0.17, 0.11), smoothstep(0.52, 0.56, n));     // brown
+  c = mix(c, vec3(0.07, 0.08, 0.06), smoothstep(0.63, 0.67, n2));    // black
+  c = mix(c, vec3(0.42, 0.40, 0.28), smoothstep(0.66, 0.70, 1.0 - n) * 0.8);   // khaki
+  diffuseColor.rgb *= c * 1.6; }`);
+  };
+  m.customProgramCacheKey = () => 'camo1';
+}
 function prepModels() {
+  for (const n of ['l9', 'l9_lo']) if (MODELS[n]) l9Paint(MODELS[n]);
   // the motorcycle scan has no colours: army paint
   for (const n of ['moto', 'moto_lo']) if (MODELS[n]) MODELS[n].traverse(o => { if (o.isMesh) { o.material.color.set(0x5d6642); o.material.roughness = 0.62; o.material.metalness = 0.3; } });
   // gunner: Mixamo T-pose → arms forward onto the machine gun's grips
@@ -1819,9 +1862,10 @@ attribute vec2 aTrk; uniform float uTrkOff; uniform float uTrkLen; uniform vec2 
 // ── per-type fitting ──
 function dressVis(type, vis, color) {
   if (!modelsDone || vis.model) return;
-  const name = { tank: 'tank', plane: 'jet', ship: 'ship', jeep: 'jeep', icbm: 'topol', drone: 'drone', gunner: 'soldier', soldier: 'soldier', moto: 'moto' }[type];
+  const key = vis.skin === 'l9' && MODELS.l9 ? 'l9' : type;
+  const name = { tank: 'tank', plane: 'jet', ship: 'ship', jeep: 'jeep', icbm: 'topol', drone: 'drone', gunner: 'soldier', soldier: 'soldier', moto: 'moto', l9: 'l9' }[key];
   if (!MODELS[name]) return;
-  atOrigin(vis.g, () => DRESS[type](vis, color));
+  atOrigin(vis.g, () => DRESS[key](vis, color));
   vis.model = true;
 }
 const DRESS = {
@@ -1935,6 +1979,40 @@ const DRESS = {
     // front wheels steer: each sits in its own turning group
     v.steerers = v.wheels.filter(w => w.position.z > 0).map(w => { const sg = new THREE.Group(); sg.position.copy(w.position); g.add(sg); sg.add(w); w.position.set(0, 0, 0); return sg; });
     addLod(v, g, [holder, v.turret, ...v.wheels], lo, col, 0.5);
+  },
+  // Li Auto L9 in army paint with the jeep's roof machine gun
+  l9(v, col) {
+    const g = v.g; hideProc(g);
+    const holder = fitModel('l9', { len: 5.2, rotY: Math.PI / 2 }), lo = fitLike(holder, 'l9_lo');
+    g.add(holder); g.updateMatrixWorld(true);
+    v.mats = ownMats(holder, col, 0.25);
+    for (const m of v.mats) if (m.userData.camo) camo(m);
+    // wheels: split by corner, spin each, front ones steer
+    const wheels = []; holder.traverse(o => { if (o.isMesh && l9Part(o) === 'wheel') wheels.push(o); });
+    const corners = {};
+    for (const m of wheels) for (const [k, part] of Object.entries(splitMesh(m, p => (p.x < 0 ? 'L' : 'R') + (p.z < 0 ? 'B' : 'F')))) (corners[k] = corners[k] || []).push(part);
+    v.wheels = Object.values(corners).map(list => pivotAt(g, boxOf(list).getCenter(new THREE.Vector3()), ...list));
+    v.steerers = v.wheels.filter(w => w.position.z > 0).map(w => { const sg = new THREE.Group(); sg.position.copy(w.position); g.add(sg); sg.add(w); w.position.set(0, 0, 0); return sg; });
+    // roof machine gun taken from the jeep model
+    const top = boxOf([holder]).max.y;
+    v.turret.position.set(0, top - 0.06, -0.35); v.turret.rotation.set(0, 0, 0); v.gun.position.set(0, 0, 0); v.gun.rotation.set(0, 0, 0);
+    if (MODELS.jeep) {
+      const jh = fitModel('jeep', { len: 4.6 }); jh.updateMatrixWorld(true);
+      const mg = meshesNamed(jh, /^K_Machine_Gun/);
+      if (mg.length) {
+        const mount = meshesNamed(jh, /^K_Machine_Gun_004/), shield = meshesNamed(jh, /^K_Machine_Gun_001/), barrel = meshesNamed(jh, /^K_Machine_Gun__/);
+        const bm = boxOf(mount.length ? mount : mg), bs = boxOf(shield.length ? shield : mg);
+        const at = new THREE.Vector3(0, bm.min.y, ((bm.min.z + bm.max.z) / 2 + (bs.min.z + bs.max.z) / 2) / 2);
+        const bb = boxOf(barrel.length ? barrel : mg);
+        const off = new THREE.Matrix4().makeTranslation(-at.x, -at.y, -at.z);
+        for (const m of mg) { const c = m.clone(); c.matrixAutoUpdate = true; new THREE.Matrix4().multiplyMatrices(off, m.matrixWorld).decompose(c.position, c.quaternion, c.scale); v.gun.add(c); }
+        v.mats = v.mats.concat(ownMats(v.gun, col, 0.3));
+        v.tip.position.set((bb.min.x + bb.max.x) / 2 - at.x, bb.max.y - 0.06 - at.y, bb.max.z - at.z);
+        if (v.tip.parent !== v.gun) v.gun.add(v.tip);
+      }
+    }
+    mergeStatic(holder); for (const w of v.wheels) mergeStatic(w);
+    if (lo) { g.add(lo); v.mats = v.mats.concat(ownMats(lo, col, 0.25).map(m => { if (m.userData.camo) camo(m); return m; })); v.hiParts = [holder, ...v.wheels]; v.loParts = [lo]; v.lo = false; lo.visible = false; }
   },
   moto(v, col) {
     const g = v.g; hideProc(g, [v.turret]);
@@ -2169,7 +2247,7 @@ function updateTrees(force) {
 // and blocks of the abandoned town scattered through both bases. Colliders come from the models' own shapes.
 const SPAWN_PTS = [   // team 0 layout (server.js LAYOUT); team 1 is mirrored in x
   [-1110, -10], [-1110, 25], [-1110, 60], [-1170, 150], [-1150, 165], [-1130, 180], [-1430, -262], [-1395, -238],
-  [-1070, 5], [-1070, 45], [-1185, 14], [-1185, 22], [-985, 40], [-1010, 215], [-1150, 405], [-1235, 75], [-1235, 90],
+  [-1070, 5], [-1070, 45], [-1110, 200], [-1185, 14], [-1185, 22], [-985, 40], [-1010, 215], [-1150, 405], [-1235, 75], [-1235, 90],
 ];
 const TOWN_T = {};
 // the abandoned town is a cross of two streets; its four corner blocks are cut apart so they can be placed on their own
@@ -2391,13 +2469,14 @@ function buildVis(type, team, n) {
 }
 function makeVehicle(d) {
   const vis = buildVis(d.type, d.team, d.n);
+  vis.skin = d.skin || null;
   addDetail(d.type, vis, TEAM_COL[d.team]);
   if (d.type !== 'tank') compact(vis.g, visRefs(vis));
   realism(vis.g);
   dressVis(d.type, vis, TEAM_COL[d.team]);
   scene.add(vis.g);
   const v = {
-    vid: d.vid, team: d.team, type: d.type, n: d.n, vis, alive: d.alive, hp: d.hp, max: d.max, driver: d.driver, gunner: d.gunner || null,
+    vid: d.vid, team: d.team, type: d.type, skin: d.skin || null, n: d.n, vis, alive: d.alive, hp: d.hp, max: d.max, driver: d.driver, gunner: d.gunner || null,
     pos: new THREE.Vector3(), h: 0, p: 0, r: 0, speed: 0, aimYaw: 0, aimPitch: 0, f1: 0, f2: 0,
     tpos: new THREE.Vector3(), th: 0, tp: 0, tr: 0, tspeed: 0, recv: 0,
     inv: new THREE.Matrix4(), marker: null, dead: null, smokeT: 0, wheelA: 0, seen: false, seenT: 0, fireAcc: 0, mgT: 0
@@ -3687,7 +3766,7 @@ function updateCmd(dt) {
   } else { tip.style.display = 'none'; canvas.style.cursor = cmdDrag ? 'grabbing' : 'default'; }
 }
 const myTeam = () => { const p = me(); return p ? p.team : 0; };
-const vName = v => TYPE_NAME[v.type] + ' ' + v.n;
+const vName = v => v.skin === 'l9' ? 'Li L9' : TYPE_NAME[v.type] + ' ' + v.n;
 // can I get in? (a motorcycle also has the gunner's seat in its sidecar)
 const seatFree = v => !v.driver || v.driver === myId || (v.type === 'moto' && (!v.gunner || v.gunner === myId));
 function requestEnter(vid) {
