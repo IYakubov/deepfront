@@ -176,7 +176,7 @@ function damage(r, v, dmg, by, pt, kind) {
   if (sh && sh.team !== v.team) { sh.dmg += real; v.lastHitBy = sh.id; v.lastHitAt = Date.now(); }
   io.to(r.code).emit('dmg', { vid: v.vid, by, dmg: real, hp: v.hp, pt, kind });
   // hit while in the repair hangar: no repair for a minute, counted from the last hit
-  if (v.inHangar && v.hp > 0) { v.noRepair = Date.now() + REPAIR_T * 1000; io.to(r.code).emit('repair', { vid: v.vid, state: 'hit', prog: 0 }); }
+  if ((v.inHangar || (v.type === 'plane' && Date.now() - (v.fixAt || 0) < 2500)) && v.hp > 0) { v.noRepair = Date.now() + REPAIR_T * 1000; io.to(r.code).emit('repair', { vid: v.vid, state: 'hit', prog: 0 }); }
   if (v.hp <= 0) destroyVehicle(r, v, by, kind);
 }
 
@@ -278,6 +278,20 @@ io.on('connection', socket => {
     p.vid = v.vid;
     cb && cb({ ok: true, st: v.st, seat });
     broadcastRoom(room);
+  });
+  // a plane parked on its own airfield gets its hit points back over 30 s (the client asks once a second)
+  socket.on('pfix', () => {
+    const v = myVehicle(), now = Date.now();
+    if (!v || v.type !== 'plane' || !v.alive || v.driver !== socket.id || room.state !== 'playing' || !v.st) return;
+    const bx = v.team ? 1200 : -1200;
+    const x = v.st[0], z = v.st[2];
+    const home = Math.hypot(x - bx, z - 60) < 290 || (Math.abs(x) > 990 && Math.sign(x) === (v.team ? 1 : -1) && Math.abs(z + 250) < 90);   // base or its runway
+    if (!home || Math.abs(v.st[6] || 0) > 2) return;
+    if (now - (v.fixAt || 0) < 850) return;
+    v.fixAt = now;
+    if (v.noRepair > now || v.hp >= v.max) return;
+    v.hp = Math.min(v.max, v.hp + Math.ceil(v.max / 30));
+    io.to(room.code).emit('heal', { vid: v.vid, hp: v.hp, prog: v.hp / v.max });
   });
   socket.on('exit', () => {
     const p = me(), v = myVehicle();

@@ -3402,11 +3402,15 @@ function drivePlane(v, dt, frozen) {
     logMsg(lockedOn ? 'Ракеты с наведением: <b style="color:#ff7a68">' + vName(vehicles.get(lockVid)) + '</b>' : 'Ракеты без захвата — летят прямо');
   }
   bombCd = Math.max(0, bombCd - dt);
-  // rearm: parked at the home base for 30 s
-  if (!v.air && Math.abs(v.speed) < 1 && inOwnBase(v) && (v.bombs < 3 || v.rk < 16 || flares < 3)) {
+  // rearm and repair: parked at the home base for 30 s (the server adds the hit points second by second)
+  const hurt = v.hp < v.max;
+  if (!v.air && Math.abs(v.speed) < 1 && inOwnBase(v) && (v.bombs < 3 || v.rk < 16 || flares < 3 || hurt)) {
     v.loadT += dt;
-    warnText = 'ЗАГРУЗКА БОМБ И РАКЕТ: ' + Math.ceil(30 - v.loadT) + ' с';
-    if (v.loadT >= 30) { v.bombs = 3; v.rk = 16; flares = 3; v.loadT = 0; audio.play('energy', 0.7); centerMsg('ВООРУЖЕНИЕ ЗАГРУЖЕНО', '3 бомбы · 16 ракет', 1800, '#9bff7a'); }
+    v.fixT = (v.fixT || 0) - dt;
+    if (hurt && v.fixT <= 0) { v.fixT = 1; socket.emit('pfix'); }
+    const blocked = hurt && v.repairBlock > performance.now();
+    warnText = (hurt ? (blocked ? 'РЕМОНТ ОСТАНОВЛЕН (ОБСТРЕЛ) · ' : 'РЕМОНТ ' + Math.round(v.hp / v.max * 100) + '% · ') : '') + 'ЗАГРУЗКА БОМБ И РАКЕТ: ' + Math.ceil(30 - v.loadT) + ' с';
+    if (v.loadT >= 30) { v.bombs = 3; v.rk = 16; flares = 3; v.loadT = 0; audio.play('energy', 0.7); centerMsg(hurt ? 'ВООРУЖЕНИЕ ЗАГРУЖЕНО' : 'САМОЛЁТ ГОТОВ', '3 бомбы · 16 ракет' + (hurt ? '' : ' · прочность 100%'), 1800, '#9bff7a'); }
   } else v.loadT = 0;
   flareCd = Math.max(0, flareCd - dt);
   audio.engine('plane', v.thr, Math.min(1, Math.abs(v.speed) / 160));
