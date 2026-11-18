@@ -75,6 +75,10 @@ const digitCode = () => digitEls.map(e => e.value).join('');
 const urlCode = (new URLSearchParams(location.search).get('code') || '').replace(/\D/g, '').slice(0, 6);
 if (urlCode.length === 6) urlCode.split('').forEach((c, i) => digitEls[i].value = c);
 
+// my seat in a room: survives a page reload, so the game can put me back
+function keepToken(t) { myToken = t; try { if (t) localStorage.setItem('wf_tok', JSON.stringify(t)); else localStorage.removeItem('wf_tok'); } catch (e) {} }
+let resumeAfterLoad = false;
+(() => { try { const t = JSON.parse(localStorage.getItem('wf_tok') || 'null'); if (t && t.code === urlCode && t.token) { myToken = t; resumeAfterLoad = true; } } catch (e) {} })();
 function saveName() { try { localStorage.setItem('wf_name', nameIn.value.trim()); } catch (e) {} }
 function showScreen(id) {
   for (const s of ['menu', 'lobby', 'pause', 'result']) $(s).classList.toggle('on', s === id);
@@ -83,7 +87,7 @@ $('createBtn').onclick = () => {
   audio.unlock(); saveName();
   socket.emit('create', { name: nameIn.value }, r => {
     if (!r.ok) return $('err').textContent = r.err;
-    myId = r.id; myToken = { code: r.code, token: r.token }; history.replaceState(null, '', '?code=' + r.code); showScreen('lobby');
+    myId = r.id; keepToken({ code: r.code, token: r.token }); history.replaceState(null, '', '?code=' + r.code); showScreen('lobby');
   });
 };
 function doJoin() {
@@ -92,7 +96,7 @@ function doJoin() {
   if (code.length !== 6) return $('err').textContent = 'Введите 6-значный код';
   socket.emit('join', { code, name: nameIn.value }, r => {
     if (!r.ok) return $('err').textContent = r.err;
-    myId = r.id; myToken = { code: r.code, token: r.token }; history.replaceState(null, '', '?code=' + r.code); showScreen('lobby');
+    myId = r.id; keepToken({ code: r.code, token: r.token }); history.replaceState(null, '', '?code=' + r.code); showScreen('lobby');
   });
 }
 $('joinBtn').onclick = doJoin;
@@ -105,7 +109,11 @@ $('copyBtn').onclick = () => {
 $('mTeam').onclick = () => socket.emit('setMode', 'team');
 $('mFfa').onclick = () => socket.emit('setMode', 'ffa');
 $('startBtn').onclick = () => { audio.unlock(); socket.emit('start'); };
-$('leaveBtn').onclick = $('pLeaveBtn').onclick = $('resLeave').onclick = () => { location.href = location.pathname; };
+$('leaveBtn').onclick = $('pLeaveBtn').onclick = $('resLeave').onclick = () => {
+  keepToken(null);
+  let gone = false; const go = () => { if (!gone) { gone = true; location.href = location.pathname; } };
+  socket.emit('leave', null, go); setTimeout(go, 600);
+};
 $('resumeBtn').onclick = () => { showScreen(null); if (mode === 'drive') lockPointer(); };
 $('pLobbyBtn').onclick = () => socket.emit('toLobby');
 $('resLobby').onclick = () => socket.emit('toLobby');
@@ -121,7 +129,7 @@ function renderLobby() {
   $('mTeam').classList.toggle('on', room.mode === 'team');
   $('mFfa').classList.toggle('on', room.mode === 'ffa');
   $('mTeam').disabled = $('mFfa').disabled = !isHost();
-  const chip = p => `<div class="chip ${p.id === myId ? 'me' : ''}"><span>${esc(p.name)}</span>${p.id === room.hostId ? '<i>ХОСТ</i>' : ''}</div>`;
+  const chip = p => `<div class="chip ${p.id === myId ? 'me' : ''}"><span>${esc(p.name)}${p.away ? ' <small style="opacity:.6">· нет связи</small>' : ''}</span>${p.id === room.hostId ? '<i>ХОСТ</i>' : ''}</div>`;
   if (room.mode === 'team') {
     const col = (t, nm, c) => `<div class="team"><h4 style="color:${c}">${nm}<button data-t="${t}">${me() && me().team === t ? 'ВАША КОМАНДА' : 'ВОЙТИ'}</button></h4>${room.players.filter(p => p.team === t).map(chip).join('')}</div>`;
     $('teams').innerHTML = col(0, 'АЛЬФА', 'var(--a)') + col(1, 'БРАВО', 'var(--b)');
@@ -4424,6 +4432,7 @@ socket.on('room', r => {
   roomRecv = performance.now();
   if (r.state === 'lobby' && !inGame && !$('result').classList.contains('on')) showScreen(myId ? 'lobby' : 'menu');
   if (!myId) return;
+  if (resumeAfterLoad) resumeRoom();
   renderLobby();
   if (inGame) {
     syncVehicles();
@@ -4435,6 +4444,14 @@ socket.on('room', r => {
   }
   if ($('board').classList.contains('on')) renderBoard();
 });
+function resumeRoom() {
+  if (!resumeAfterLoad || !room || !myId || !me()) return;
+  resumeAfterLoad = false;
+  if (room.state !== 'playing') { showScreen('lobby'); return; }
+  matchStartAt = 0; startPlaying(false);
+  const p = me();
+  if (p.vid) setTimeout(() => requestEnter(p.vid), 300);    // back into the same vehicle / seat
+}
 function startPlaying(fromStart) {
   if (worldSeed !== room.seed) { buildWorld(room.seed); worldSeed = room.seed; }
   inGame = true;
@@ -4567,6 +4584,14 @@ socket.on('disconnect', reason => {
   centerMsg('СВЯЗЬ ПРЕРВАНА', 'переподключение…', 99999, '#e3a53c');
 });
 socket.on('connect', () => {
+  if (resumeAfterLoad && !myId) {           // the page was reloaded: take my place in the game back
+    socket.emit('rejoin', myToken, r => {
+      if (!r || !r.ok) { resumeAfterLoad = false; keepToken(null); $('err').textContent = 'Игра ' + urlCode + ' уже закрыта'; return; }
+      myId = r.id;
+      if (room && room.code === r.code) resumeRoom();
+    });
+    return;
+  }
   if (!wasDisconnected || !myToken) return;
   wasDisconnected = false;
   socket.emit('rejoin', myToken, r => {
@@ -4578,7 +4603,6 @@ socket.on('connect', () => {
 });
 socket.on('away', d => { if (d.id !== myId) logMsg('<b>' + esc(d.name) + '</b> — связь прервана, ждём…'); });
 socket.on('rejoined', d => { if (d.id !== myId) logMsg('<b>' + esc(d.name) + '</b> вернулся'); });
-addEventListener('pagehide', () => { if (myId) socket.emit('leaving'); });
 function leaveGame() {
   inGame = false; myVid = null; mode = 'cmd';
   $('ui').classList.remove('on'); $('warn').style.display = 'none'; document.body.classList.remove('cmdv');

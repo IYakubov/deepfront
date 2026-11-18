@@ -73,7 +73,7 @@ function publicRoom(r) {
   return {
     code: r.code, hostId: r.hostId, state: r.state, mode: 'team', seed: r.seed, tickets: r.tickets,
     timeLeft: r.endsAt && r.state === 'playing' ? Math.max(0, r.endsAt - Date.now()) : null,
-    players: [...r.players.values()].map(p => ({ id: p.id, name: p.name, team: p.team, vid: p.vid, kills: p.kills, deaths: p.deaths, dmg: Math.round(p.dmg) })),
+    players: [...r.players.values()].map(p => ({ id: p.id, name: p.name, team: p.team, away: !!p.away, vid: p.vid, kills: p.kills, deaths: p.deaths, dmg: Math.round(p.dmg) })),
     vehicles: r.vehicles.map(v => ({ vid: v.vid, team: v.team, type: v.type, skin: v.skin || null, n: v.n, hp: v.hp, max: v.max, alive: v.alive, ammo: v.ammo, spent: v.spent, driver: v.driver, gunner: v.gunner || null, auto: v.auto || null, spawn: v.spawn, st: v.st, })),
     hangars: (r.hangars || []).map(h => ({ team: h.team, hp: h.hp, max: h.max, busy: h.busy, prog: h.prog })),
   };
@@ -104,6 +104,15 @@ function hangarTick(r) {
     io.to(r.code).emit('hangar', hangarState(h));
   }
 }
+const ROOM_KEEP = 30 * 60 * 1000;                    // a room nobody is playing in stays open this long
+const online = r => [...r.players.values()].filter(p => !p.away);
+setInterval(() => {
+  const now = Date.now();
+  for (const r of rooms.values()) {
+    if (online(r).length) { r.lastActive = now; continue; }
+    if (now - (r.lastActive || 0) > ROOM_KEEP) { clearInterval(r.tick); for (const p of r.players.values()) { clearTimeout(p.awayTimer); clearTimeout(p.seatTimer); } rooms.delete(r.code); console.log('room closed (idle 30 min)', r.code); }
+  }
+}, 60000);
 function broadcastRoom(r) { io.to(r.code).emit('room', publicRoom(r)); }
 function teamCount(r, t) { let n = 0; for (const p of r.players.values()) if (p.team === t) n++; return n; }
 function rebalance(r) {
@@ -186,6 +195,13 @@ io.on('connection', socket => {
     r.players.set(socket.id, { id: socket.id, token, name: cleanName(name), team, vid: null, kills: 0, deaths: 0, dmg: 0 });
     return token;
   }
+  // free the driver's / gunner's seat of a player who is not here (the autopilot car keeps going)
+  function releaseSeats(r, id) {
+    const p = r.players.get(id); if (!p) return;
+    for (const v of r.vehicles) { if (v.gunner === id) { v.gunner = null; v.gst = null; } if (v.driver === id) v.driver = null; }
+    p.vid = null;
+    broadcastRoom(r);
+  }
   // final removal of a player (left, or did not come back in time)
   function removePlayer(r, id) {
     const p = r.players.get(id); if (!p) return;
@@ -194,18 +210,21 @@ io.on('connection', socket => {
       if (v.driver === id) v.driver = null;
       if (v.auto === id) v.auto = null;                                   // the car stops where it is
     }
+    clearTimeout(p.seatTimer); clearTimeout(p.awayTimer);
     r.players.delete(id);
-    if (r.players.size === 0) { clearInterval(r.tick); rooms.delete(r.code); return; }
-    if (r.hostId === id) r.hostId = r.players.keys().next().value;
+    if (r.players.size === 0) return;                                     // the empty room is kept for 30 min (see sweep)
+    if (r.hostId === id) r.hostId = (online(r)[0] || r.players.values().next().value).id;
     if (r.state === 'lobby') rebalance(r);
     io.to(r.code).emit('left', { id, name: p.name });
     broadcastRoom(r);
   }
 
+  socket.onAny(() => { if (room) room.lastActive = Date.now(); });
   socket.on('create', (d, cb) => {
     if (room) return cb && cb({ ok: false, err: 'Вы уже в комнате' });
     const code = newCode();
     const r = { code, hostId: socket.id, players: new Map(), state: 'lobby', seed: Math.floor(Math.random() * 1e9), tickets: [MACHINES, MACHINES], vehicles: makeVehicles(), hangars: makeHangars(), endsAt: null };
+    r.lastActive = Date.now();
     rooms.set(code, r);
     const token = attach(r, d && d.name);
     cb && cb({ ok: true, code, id: socket.id, token });
@@ -218,6 +237,7 @@ io.on('connection', socket => {
     if (r.players.size >= MAX_PLAYERS) return cb && cb({ ok: false, err: 'Комната заполнена' });
     if (room) return cb && cb({ ok: false, err: 'Вы уже в комнате' });
     const token = attach(r, d && d.name);
+    if (!r.players.has(r.hostId) || r.players.get(r.hostId).away) r.hostId = socket.id;
     cb && cb({ ok: true, code, id: socket.id, token });
     broadcastRoom(r);
     if (r.state === 'playing') socket.emit('lateJoin', {});
@@ -365,25 +385,31 @@ io.on('connection', socket => {
     t = String(t || '').replace(/[<>]/g, '').slice(0, 80);
     if (p && t) io.to(room.code).emit('chat', { name: p.name, team: p.team, text: t });
   });
-  // a dropped connection keeps the player (and his seat) for 90 s, so the game can reconnect him
+  // a dropped connection or a reloaded page keeps the player: his seat for 90 s, himself (team, score) for 30 min
   socket.on('disconnect', () => {
     if (!room) return;
     const r = room, p = me(); if (!p) return;
     if (p.leaving) { removePlayer(r, socket.id); return; }
     p.away = Date.now();
-    p.awayTimer = setTimeout(() => { if (r.players.get(p.id) === p && p.away) removePlayer(r, p.id); }, 90000);
+    p.seatTimer = setTimeout(() => { if (r.players.get(p.id) === p && p.away) releaseSeats(r, p.id); }, 90000);
+    p.awayTimer = setTimeout(() => { if (r.players.get(p.id) === p && p.away) removePlayer(r, p.id); }, ROOM_KEEP);
+    if (r.hostId === p.id && online(r).length) r.hostId = online(r)[0].id;
     io.to(r.code).emit('away', { id: p.id, name: p.name });
+    broadcastRoom(r);
   });
   socket.on('leaving', () => { const p = me(); if (p) p.leaving = true; });
+  // the Leave button: out at once, seat freed
+  socket.on('leave', (d, cb) => { if (room) { const r = room; removePlayer(r, socket.id); socket.leave(r.code); room = null; } cb && cb(); });
   socket.on('rejoin', (d, cb) => {
     const r = rooms.get(String((d && d.code) || ''));
     const p = r && [...r.players.values()].find(q => q.token && q.token === (d && d.token));
     if (!r || !p || room) return cb && cb({ ok: false });
     const old = p.id, nid = socket.id;
-    clearTimeout(p.awayTimer); p.away = 0;
+    clearTimeout(p.awayTimer); clearTimeout(p.seatTimer); p.away = 0;
+    r.lastActive = Date.now();
     // the player now answers to the new connection's id
     r.players.delete(old); p.id = nid; r.players.set(nid, p);
-    if (r.hostId === old) r.hostId = nid;
+    if (r.hostId === old || !r.players.has(r.hostId) || r.players.get(r.hostId).away) r.hostId = nid;
     for (const v of r.vehicles) { if (v.driver === old) v.driver = nid; if (v.gunner === old) v.gunner = nid; if (v.auto === old) v.auto = nid; if (v.lastHitBy === old) v.lastHitBy = nid; }
     room = r; socket.join(r.code);
     cb && cb({ ok: true, code: r.code, id: nid, old, state: r.state });
