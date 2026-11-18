@@ -2889,7 +2889,8 @@ function updateShots(dt) {
       if (s.drop <= 0) { s.vel.copy(s.dir0).multiplyScalar(s.vel.length()); particles.muzzle(s.pos, _v2.copy(s.dir0).negate()); audio.at('shoot', s.pos, 0.7, 0.55, 900); }   // motor lights: flies where the jet aimed it
     } else if (s.vmax) { if (s.vel.length() < s.vmax) s.vel.setLength(Math.min(s.vmax, s.vel.length() + 320 * dt)); s.offY *= Math.exp(-5 * dt); }
     const tvv = s.tv ? vehicles.get(s.tv) : null;
-    if (tvv && tvv.alive && !(s.k === 'rocket' && s.age > 7)) { (s.target || (s.target = new THREE.Vector3())).copy(tvv.pos); s.target.y += tvv.type === 'ship' ? 4 : 1.2; }
+    const droneT = !!tvv && tvv.type === 'drone' && s.k === 'rocket';      // a locked FPV drone: the rocket hunts it down
+    if (tvv && tvv.alive && !(s.k === 'rocket' && s.age > 7 && !droneT)) { (s.target || (s.target = new THREE.Vector3())).copy(tvv.pos); s.target.y += tvv.type === 'ship' ? 4 : droneT ? 0 : 1.2; }
     else if (s.tv) { s.tv = null; if (s.k === 'rocket') s.target = null; }
     if (s.target && !(s.drop > 0)) {
       const want = _v1.copy(s.target).sub(s.pos);
@@ -2898,10 +2899,12 @@ function updateShots(dt) {
       want.normalize();
       const dir = _v2.copy(s.vel).normalize();
       const ang = Math.acos(Math.max(-1, Math.min(1, dir.dot(want))));
-      if (ang > 1e-4) dir.lerp(want, Math.min(1, 1.6 * dt / ang)).normalize();
+      if (ang > 1e-4) dir.lerp(want, Math.min(1, (droneT ? 14 : 1.6) * dt / ang)).normalize();
       const spd = Math.min(sp.speed * 1.5, s.vel.length() + (s.k === 'rocket' ? 320 : 60) * dt);
       s.vel.copy(dir).multiplyScalar(spd);
     } else if (!(s.drop > 0)) s.vel.y -= GRAV * sp.grav * dt;
+    // proximity fuse against a locked drone: close enough is a hit
+    if (droneT && tvv.alive && !(s.drop > 0) && s.pos.distanceTo(tvv.pos) < 7) { impact(s, tvv.pos.clone(), 'veh', tvv); scene.remove(s.mesh); shots.splice(i, 1); continue; }
     const step = s.vel.length() * dt;
     _o3[0] = s.pos.x; _o3[1] = s.pos.y; _o3[2] = s.pos.z;
     _d3[0] = s.vel.x / (step / dt); _d3[1] = s.vel.y / (step / dt); _d3[2] = s.vel.z / (step / dt);
