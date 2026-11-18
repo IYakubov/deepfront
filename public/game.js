@@ -2898,22 +2898,24 @@ function updateShots(dt) {
       if (s.drop <= 0) { s.vel.copy(s.dir0).multiplyScalar(s.vel.length()); particles.muzzle(s.pos, _v2.copy(s.dir0).negate()); audio.at('shoot', s.pos, 0.7, 0.55, 900); }   // motor lights: flies where the jet aimed it
     } else if (s.vmax) { if (s.vel.length() < s.vmax) s.vel.setLength(Math.min(s.vmax, s.vel.length() + 320 * dt)); s.offY *= Math.exp(-5 * dt); }
     const tvv = s.tv ? vehicles.get(s.tv) : null;
-    const droneT = !!tvv && tvv.type === 'drone' && s.k === 'rocket';      // a locked FPV drone: the rocket hunts it down
-    if (tvv && tvv.alive && !(s.k === 'rocket' && s.age > 7 && !droneT)) { (s.target || (s.target = new THREE.Vector3())).copy(tvv.pos); s.target.y += tvv.type === 'ship' ? 4 : droneT ? 0 : 1.2; }
-    else if (s.tv) { s.tv = null; if (s.k === 'rocket') s.target = null; }
+    const hom = s.k === 'rocket' || s.hm;                                  // jet missiles and a ship's locked salvo hunt their target
+    const droneT = !!tvv && tvv.type === 'drone' && hom;                   // a locked FPV drone: the rocket hunts it down
+    if (tvv && tvv.alive && !(hom && s.age > (s.hm ? 8 : 7) && !droneT)) { (s.target || (s.target = new THREE.Vector3())).copy(tvv.pos); s.target.y += tvv.type === 'ship' ? 4 : droneT ? 0 : 1.2; }
+    else if (s.tv) { s.tv = null; if (hom) s.target = null; }
     if (s.target && !(s.drop > 0)) {
       const want = _v1.copy(s.target).sub(s.pos);
       const dist = want.length();
-      if (s.k === 'navrocket') { if (s.age < 0.9) want.set(s.vel.x, Math.abs(s.vel.length()), s.vel.z); else if (dist > 260) want.y += dist * 0.25; }
+      if (s.hm && s.age < 0.9) want.set(s.vel.x, Math.abs(s.vel.length()), s.vel.z);    // out of the launcher first, then straight at it
+      else if (s.k === 'navrocket' && !s.hm) { if (s.age < 0.9) want.set(s.vel.x, Math.abs(s.vel.length()), s.vel.z); else if (dist > 260) want.y += dist * 0.25; }
       want.normalize();
       const dir = _v2.copy(s.vel).normalize();
       const ang = Math.acos(Math.max(-1, Math.min(1, dir.dot(want))));
-      if (ang > 1e-4) dir.lerp(want, Math.min(1, (droneT ? 14 : 1.6) * dt / ang)).normalize();
-      const spd = Math.min(sp.speed * 1.5, s.vel.length() + (s.k === 'rocket' ? 320 : 60) * dt);
+      if (ang > 1e-4) dir.lerp(want, Math.min(1, (droneT ? 14 : s.hm ? 2 : 1.6) * dt / ang)).normalize();
+      const spd = s.hm ? Math.min(345, s.vel.length() + 320 * dt) : Math.min(sp.speed * 1.5, s.vel.length() + (s.k === 'rocket' ? 320 : 60) * dt);
       s.vel.copy(dir).multiplyScalar(spd);
     } else if (!(s.drop > 0)) s.vel.y -= GRAV * sp.grav * dt;
-    // proximity fuse against a locked drone: close enough is a hit
-    if (droneT && tvv.alive && !(s.drop > 0) && s.pos.distanceTo(tvv.pos) < 7) { impact(s, tvv.pos.clone(), 'veh', tvv); scene.remove(s.mesh); shots.splice(i, 1); continue; }
+    // proximity fuse against a locked drone (or the target of a ship's locked salvo): close enough is a hit
+    if (tvv && tvv.alive && (droneT || s.hm) && !(s.drop > 0) && s.pos.distanceTo(tvv.pos) < (droneT ? 7 : 6)) { impact(s, tvv.pos.clone(), 'veh', tvv); scene.remove(s.mesh); shots.splice(i, 1); continue; }
     const step = s.vel.length() * dt;
     _o3[0] = s.pos.x; _o3[1] = s.pos.y; _o3[2] = s.pos.z;
     _d3[0] = s.vel.x / (step / dt); _d3[1] = s.vel.y / (step / dt); _d3[2] = s.vel.z / (step / dt);
@@ -2936,7 +2938,7 @@ function updateShots(dt) {
 socket.on('shot', (pid, s) => {
   if (!inGame || !s || !SPEC[s.k]) return;
   const o = new THREE.Vector3(...s.o), vel = new THREE.Vector3(...s.v);
-  spawnShot(s.k, o, vel, false, s.vid, Object.assign(s.t ? { target: new THREE.Vector3(...s.t) } : {}, s.tv ? { tv: s.tv } : {}));
+  spawnShot(s.k, o, vel, false, s.vid, Object.assign(s.t ? { target: new THREE.Vector3(...s.t) } : {}, s.tv ? { tv: s.tv } : {}, s.hm ? { hm: true } : {}));
   if (s.tv && s.tv === myVid) logMsg('<b style="color:#ff6a50">По вам пущена ракета!</b>');
   if (s.k === 'icbm') { centerMsg('РАКЕТНЫЙ УДАР!', 'цель отмечена на карте · ' + ICBM_T + ' с до удара', 4000, '#ff5a46'); audio.play('missile_alert', 0.9); setTimeout(() => audio.play('missile_alert', 0.9), 2300); audio.at('shoot', o, 2, 0.4, 3000); return; }
   if (s.k === 'mg' || s.k === 'cannon' || s.k === 'ak') { if (Math.random() < 0.5) audio.at('shoot', o, 0.25, s.k === 'mg' ? 1.9 : s.k === 'ak' ? 2.2 : 2.4, 700); }
@@ -2962,8 +2964,8 @@ function fireShot(k, o, dir, extra = {}) {
   const vel = dir.clone().multiplyScalar(SPEC[k].speed);
   if (extra.inherit) vel.add(extra.inherit);
   const owner = extra.owner || myVid;
-  spawnShot(k, o, vel, true, owner, Object.assign(extra.target ? { target: extra.target.clone() } : {}, extra.tv ? { tv: extra.tv } : {}));
-  socket.emit('shot', { k, vid: owner, o: [+o.x.toFixed(2), +o.y.toFixed(2), +o.z.toFixed(2)], v: [+vel.x.toFixed(1), +vel.y.toFixed(1), +vel.z.toFixed(1)], t: extra.target ? [+extra.target.x.toFixed(1), +extra.target.y.toFixed(1), +extra.target.z.toFixed(1)] : null, tv: extra.tv || null });
+  spawnShot(k, o, vel, true, owner, Object.assign(extra.target ? { target: extra.target.clone() } : {}, extra.tv ? { tv: extra.tv } : {}, extra.hm ? { hm: true } : {}));
+  socket.emit('shot', { k, vid: owner, o: [+o.x.toFixed(2), +o.y.toFixed(2), +o.z.toFixed(2)], v: [+vel.x.toFixed(1), +vel.y.toFixed(1), +vel.z.toFixed(1)], t: extra.target ? [+extra.target.x.toFixed(1), +extra.target.y.toFixed(1), +extra.target.z.toFixed(1)] : null, tv: extra.tv || null, hm: extra.hm ? 1 : 0 });
 }
 function clearShots() { for (const s of shots) scene.remove(s.mesh); shots.length = 0; for (const m of sams) scene.remove(m.mesh); sams.length = 0; }
 
@@ -3018,7 +3020,7 @@ socket.on('flare', pid => {
   if (!v) return;
   for (let i = 0; i < 6; i++) particles.flare(v.pos, _v1.set((Math.random() - .5) * 30, -6 - Math.random() * 8, (Math.random() - .5) * 30));
   for (const m of sams) if (m.target === v.vid && !m.decoy && Math.random() < 0.75) m.decoy = { pos: v.pos.clone().add(_v2.set(0, -30, 0)) };
-  for (const s of shots) if (s.tv === v.vid && s.k === 'rocket' && Math.random() < 0.7) { s.tv = null; s.target = null; }
+  for (const s of shots) if (s.tv === v.vid && (s.k === 'rocket' || s.hm) && Math.random() < 0.7) { s.tv = null; s.target = null; }
 });
 function updateSams(dt) {
   for (let i = sams.length - 1; i >= 0; i--) {
@@ -3136,6 +3138,7 @@ const SHIP_TEL = [-0.4, 0, 0.33, 0.66, 1];
 const SHIP_TEL_TXT = ['НАЗАД', 'СТОП', '1/3', '2/3', 'ПОЛНЫЙ'];
 let sendT = 0, shake = 0, warnText = '', repairT = 0, reload = 0, reload2 = 0, rockets = 6, bombCd = 0, lockVid = null, lockT = 0, lockBeep = 0;
 const LOCK_TIME = 1.5, LOCK_RANGE = 1500, LOCK_CONE = 0.3;
+const SHIP_LOCK_RANGE = 1800, SHIP_LOCK_CONE = 0.09;
 const aimPt = new THREE.Vector3(), _mk = new THREE.Vector3(), _mkv = new THREE.Vector3();
 let aimHit = null;
 function resetWeaponsFor(type) { akMag = 30; akReload = 0; reload = 0; reload2 = 0; rockets = 6; flares = 3; flareCd = 0; lockVid = null; lockT = 0; }
@@ -3663,16 +3666,39 @@ function driveShip(v, dt, frozen) {
     if (fired) { reload = 5; audio.play(gunSound(), 1.1, 0, 0.85); setTimeout(() => audio.play(gunSound(), 0.8, 0, 0.9), 140); shake = Math.max(shake, 0.35); }
     else logMsg('Орудия не достают — поверните корабль');
   }
+  // lock-on, as in the jet: hold an enemy (planes too) at the crosshair for 1.5 s, then the salvo hunts it
+  let best = null, bs = Infinity;
+  const cdir = camera.getWorldDirection(_v3);
+  for (const o of vehicles.values()) {
+    if (!o.alive || o.dead || o.team === v.team) continue;
+    const d0 = o.pos.distanceTo(v.pos); if (d0 > SHIP_LOCK_RANGE || d0 < 40) continue;
+    const dx = o.pos.x - camera.position.x, dy = o.pos.y + 1.5 - camera.position.y, dz = o.pos.z - camera.position.z, d = Math.hypot(dx, dy, dz);
+    const ang = Math.acos(Math.max(-1, Math.min(1, (dx * cdir.x + dy * cdir.y + dz * cdir.z) / d)));
+    if (ang > SHIP_LOCK_CONE) continue;
+    const sc = ang + d0 / 30000 - (o.vid === lockVid ? 0.03 : 0);
+    if (sc < bs) { bs = sc; best = o; }
+  }
+  if (best) {   // not through a hill
+    _o3[0] = v.pos.x; _o3[1] = 10; _o3[2] = v.pos.z;
+    const dx = best.pos.x - v.pos.x, dy = best.pos.y + 2 - 10, dz = best.pos.z - v.pos.z, d = Math.hypot(dx, dy, dz);
+    _d3[0] = dx / d; _d3[1] = dy / d; _d3[2] = dz / d;
+    if (rayTerrain(_o3, _d3, d - 6, 12) !== null) best = null;
+  }
+  if (best && best.vid === lockVid) lockT += dt; else { lockVid = best ? best.vid : null; lockT = 0; }
+  const lockedOn = lockVid && lockT >= LOCK_TIME;
+  lockBeep -= dt;
+  if (lockVid && lockBeep <= 0 && reload2 <= 0) { audio.tone(lockedOn ? 1250 : 760, lockedOn ? 0.12 : 0.05, 0.035); lockBeep = lockedOn ? 0.16 : 0.32; }
   if (mouseAlt && reload2 <= 0 && !chatOpen && !frozen) {
     reload2 = 18;
-    const shipTv = aimHit && aimHit.kind === 'veh' && aimHit.v.team !== v.team && aimHit.v.alive ? aimHit.v.vid : null;
-    logMsg(shipTv ? 'Ракетный залп с наведением: <b style="color:#ff7a68">' + vName(aimHit.v) + '</b>' : 'Ракетный залп по точке');
+    const lockV = lockedOn && vehicles.get(lockVid);
+    const shipTv = lockV ? lockVid : aimHit && aimHit.kind === 'veh' && aimHit.v.team !== v.team && aimHit.v.alive ? aimHit.v.vid : null;
+    logMsg(lockV ? 'Ракеты с захватом: <b style="color:#ff7a68">' + vName(lockV) + '</b>' : shipTv ? 'Ракетный залп с наведением: <b style="color:#ff7a68">' + vName(aimHit.v) + '</b>' : 'Ракетный залп по точке');
     v.vis.g.updateMatrixWorld(true);
     for (let i = 0; i < 6; i++) setTimeout(() => {
       if (!v.alive || myVid !== v.vid) return;
       const o = _v2.set(-1.05 + (i % 3) * 1.05, 8.3, -7).applyMatrix4(v.vis.g.matrixWorld).clone();
       const tgt = aimPt.clone().add(new THREE.Vector3((Math.random() - .5) * 14, 0, (Math.random() - .5) * 14));
-      fireShot('navrocket', o, new THREE.Vector3(Math.sin(v.h) * -0.3, 1, Math.cos(v.h) * -0.3).normalize(), { target: tgt, tv: shipTv });
+      fireShot('navrocket', o, new THREE.Vector3(Math.sin(v.h) * -0.3, 1, Math.cos(v.h) * -0.3).normalize(), { target: lockV ? lockV.pos.clone() : tgt, tv: shipTv, hm: !!lockV });
       audio.whoosh(0.7);
     }, i * 180);
   }
@@ -4155,18 +4181,7 @@ function drawHud(now, dt) {
     _o3[0] = v.pos.x; _o3[1] = v.pos.y; _o3[2] = v.pos.z; const fd = fwd(v.h, v.p, _v2); _d3[0] = fd.x; _d3[1] = fd.y; _d3[2] = fd.z;
     const gh = v.air ? castRay(_o3, _d3, 1500, myVid, { step: 8 }) : null;
     if (gh && !lockVid) { const pr = project(_v1.set(_o3[0] + fd.x * gh.t, _o3[1] + fd.y * gh.t, _o3[2] + fd.z * gh.t)); if (pr) { c.strokeStyle = '#ffb03a'; c.lineWidth = 2; c.beginPath(); c.rect(pr[0] - 7, pr[1] - 7, 14, 14); c.stroke(); } }
-    // lock-on marker
-    const lt = lockVid && vehicles.get(lockVid);
-    if (lt) {
-      const pl = project(_v1.copy(lt.pos).setY(lt.pos.y + 1.5));
-      if (pl) {
-        const k = Math.min(1, lockT / LOCK_TIME), r = 34 - 16 * k, col = k >= 1 ? '#ff4a36' : '#ffd24a';
-        c.strokeStyle = col; c.lineWidth = 2.5; c.setLineDash(k >= 1 ? [] : [7, 6]);
-        c.beginPath(); c.moveTo(pl[0], pl[1] - r); c.lineTo(pl[0] + r, pl[1]); c.lineTo(pl[0], pl[1] + r); c.lineTo(pl[0] - r, pl[1]); c.closePath(); c.stroke(); c.setLineDash([]);
-        c.fillStyle = col; c.font = '800 11px Unbounded'; c.textAlign = 'center';
-        c.fillText((k >= 1 ? 'ЗАХВАТ · ПКМ — ПУСК · ' : 'НАВЕДЕНИЕ ' + Math.round(k * 100) + '% · ') + vName(lt).toUpperCase() + ' · ' + Math.round(lt.pos.distanceTo(v.pos)) + ' м', pl[0], pl[1] - r - 8);
-      }
-    }
+    drawLock(c, v);
     // bomb sight
     if (v.air && v.bombs > 0) {
       const pb = project(bombImpact(v, _v3));
@@ -4198,7 +4213,8 @@ function drawHud(now, dt) {
       else if (v.type !== 'tank' && aimHit && aimHit.kind === 'veh' && aimHit.v.team !== v.team) { c.fillStyle = '#ff5a46'; c.font = '800 11px Unbounded'; c.textAlign = 'center'; c.fillText(vName(aimHit.v).toUpperCase() + ' · ' + Math.round(aimHit.t) + ' м', p[0], p[1] - 24); }
     }
     if (v.type === 'ship') {   // rocket target
-      const pr = project(aimPt);
+      drawLock(c, v);
+      const pr = lockVid ? null : project(aimPt);
       if (pr) { c.strokeStyle = reload2 <= 0 ? '#ffb03a' : 'rgba(255,176,58,.35)'; c.lineWidth = 1.5; c.beginPath(); c.moveTo(pr[0] - 18, pr[1]); c.lineTo(pr[0] + 18, pr[1]); c.moveTo(pr[0], pr[1] - 18); c.lineTo(pr[0], pr[1] + 18); c.stroke(); }
     }
   }
@@ -4208,6 +4224,20 @@ function drawHud(now, dt) {
   const wEl = $('warn');
   wEl.style.display = warnText ? 'block' : 'none';
   if (warnText) wEl.textContent = warnText;
+}
+// lock-on marker (jet and ship)
+function drawLock(c, v) {
+    const lt = lockVid && vehicles.get(lockVid);
+    if (lt) {
+      const pl = project(_v1.copy(lt.pos).setY(lt.pos.y + 1.5));
+      if (pl) {
+        const k = Math.min(1, lockT / LOCK_TIME), r = 34 - 16 * k, col = k >= 1 ? '#ff4a36' : '#ffd24a';
+        c.strokeStyle = col; c.lineWidth = 2.5; c.setLineDash(k >= 1 ? [] : [7, 6]);
+        c.beginPath(); c.moveTo(pl[0], pl[1] - r); c.lineTo(pl[0] + r, pl[1]); c.lineTo(pl[0], pl[1] + r); c.lineTo(pl[0] - r, pl[1]); c.closePath(); c.stroke(); c.setLineDash([]);
+        c.fillStyle = col; c.font = '800 11px Unbounded'; c.textAlign = 'center';
+        c.fillText((k >= 1 ? 'ЗАХВАТ · ПКМ — ПУСК · ' : 'НАВЕДЕНИЕ ' + Math.round(k * 100) + '% · ') + vName(lt).toUpperCase() + ' · ' + Math.round(lt.pos.distanceTo(v.pos)) + ' м', pl[0], pl[1] - r - 8);
+      }
+    }
 }
 let warnBeepT = 0, alarmT = 0;
 function drawThreats(c, w, h, dt) {
