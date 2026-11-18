@@ -6,6 +6,7 @@ const express = require('express');
 const http = require('http');
 const path = require('path');
 const { Server } = require('socket.io');
+const crypto = require('crypto');
 
 const app = express();
 const server = http.createServer(app);
@@ -181,7 +182,24 @@ io.on('connection', socket => {
     room = r;
     socket.join(r.code);
     const team = teamCount(r, 0) <= teamCount(r, 1) ? 0 : 1;
-    r.players.set(socket.id, { id: socket.id, name: cleanName(name), team, vid: null, kills: 0, deaths: 0, dmg: 0 });
+    const token = crypto.randomBytes(12).toString('hex');
+    r.players.set(socket.id, { id: socket.id, token, name: cleanName(name), team, vid: null, kills: 0, deaths: 0, dmg: 0 });
+    return token;
+  }
+  // final removal of a player (left, or did not come back in time)
+  function removePlayer(r, id) {
+    const p = r.players.get(id); if (!p) return;
+    for (const v of r.vehicles) {
+      if (v.gunner === id) { v.gunner = null; v.gst = null; }
+      if (v.driver === id) v.driver = null;
+      if (v.auto === id) v.auto = null;                                   // the car stops where it is
+    }
+    r.players.delete(id);
+    if (r.players.size === 0) { clearInterval(r.tick); rooms.delete(r.code); return; }
+    if (r.hostId === id) r.hostId = r.players.keys().next().value;
+    if (r.state === 'lobby') rebalance(r);
+    io.to(r.code).emit('left', { id, name: p.name });
+    broadcastRoom(r);
   }
 
   socket.on('create', (d, cb) => {
@@ -189,8 +207,8 @@ io.on('connection', socket => {
     const code = newCode();
     const r = { code, hostId: socket.id, players: new Map(), state: 'lobby', seed: Math.floor(Math.random() * 1e9), tickets: [MACHINES, MACHINES], vehicles: makeVehicles(), hangars: makeHangars(), endsAt: null };
     rooms.set(code, r);
-    attach(r, d && d.name);
-    cb && cb({ ok: true, code, id: socket.id });
+    const token = attach(r, d && d.name);
+    cb && cb({ ok: true, code, id: socket.id, token });
     broadcastRoom(r);
   });
   socket.on('join', (d, cb) => {
@@ -199,8 +217,8 @@ io.on('connection', socket => {
     if (!r) return cb && cb({ ok: false, err: 'Нет игры с кодом ' + code });
     if (r.players.size >= MAX_PLAYERS) return cb && cb({ ok: false, err: 'Комната заполнена' });
     if (room) return cb && cb({ ok: false, err: 'Вы уже в комнате' });
-    attach(r, d && d.name);
-    cb && cb({ ok: true, code, id: socket.id });
+    const token = attach(r, d && d.name);
+    cb && cb({ ok: true, code, id: socket.id, token });
     broadcastRoom(r);
     if (r.state === 'playing') socket.emit('lateJoin', {});
   });
@@ -347,16 +365,29 @@ io.on('connection', socket => {
     t = String(t || '').replace(/[<>]/g, '').slice(0, 80);
     if (p && t) io.to(room.code).emit('chat', { name: p.name, team: p.team, text: t });
   });
+  // a dropped connection keeps the player (and his seat) for 90 s, so the game can reconnect him
   socket.on('disconnect', () => {
     if (!room) return;
-    const r = room, p = me();
-    leaveSeat(myVehicle());
-    for (const v of r.vehicles) if (v.auto === socket.id) v.auto = null;   // the car stops where it is
-    r.players.delete(socket.id);
-    if (r.players.size === 0) { clearInterval(r.tick); rooms.delete(r.code); return; }
-    if (r.hostId === socket.id) r.hostId = r.players.keys().next().value;
-    if (r.state === 'lobby') rebalance(r);
-    io.to(r.code).emit('left', { id: socket.id, name: p ? p.name : '' });
+    const r = room, p = me(); if (!p) return;
+    if (p.leaving) { removePlayer(r, socket.id); return; }
+    p.away = Date.now();
+    p.awayTimer = setTimeout(() => { if (r.players.get(p.id) === p && p.away) removePlayer(r, p.id); }, 90000);
+    io.to(r.code).emit('away', { id: p.id, name: p.name });
+  });
+  socket.on('leaving', () => { const p = me(); if (p) p.leaving = true; });
+  socket.on('rejoin', (d, cb) => {
+    const r = rooms.get(String((d && d.code) || ''));
+    const p = r && [...r.players.values()].find(q => q.token && q.token === (d && d.token));
+    if (!r || !p || room) return cb && cb({ ok: false });
+    const old = p.id, nid = socket.id;
+    clearTimeout(p.awayTimer); p.away = 0;
+    // the player now answers to the new connection's id
+    r.players.delete(old); p.id = nid; r.players.set(nid, p);
+    if (r.hostId === old) r.hostId = nid;
+    for (const v of r.vehicles) { if (v.driver === old) v.driver = nid; if (v.gunner === old) v.gunner = nid; if (v.auto === old) v.auto = nid; if (v.lastHitBy === old) v.lastHitBy = nid; }
+    room = r; socket.join(r.code);
+    cb && cb({ ok: true, code: r.code, id: nid, old, state: r.state });
+    io.to(r.code).emit('rejoined', { old, id: nid, name: p.name });
     broadcastRoom(r);
   });
 });

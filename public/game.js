@@ -44,6 +44,7 @@ const DMG = {
 
 // ── state ──
 let myId = null, room = null, inGame = false, worldSeed = null;
+let myToken = null;              // proves who I am if the connection drops and the game reconnects
 let mode = 'cmd';               // 'cmd' (top view over the base) | 'drive'
 let myVid = null;               // vehicle I'm driving
 let mySeat = 0;                 // 0 — driver, 1 — machine-gunner in a motorcycle's sidecar
@@ -82,7 +83,7 @@ $('createBtn').onclick = () => {
   audio.unlock(); saveName();
   socket.emit('create', { name: nameIn.value }, r => {
     if (!r.ok) return $('err').textContent = r.err;
-    myId = r.id; history.replaceState(null, '', '?code=' + r.code); showScreen('lobby');
+    myId = r.id; myToken = { code: r.code, token: r.token }; history.replaceState(null, '', '?code=' + r.code); showScreen('lobby');
   });
 };
 function doJoin() {
@@ -91,7 +92,7 @@ function doJoin() {
   if (code.length !== 6) return $('err').textContent = 'Введите 6-значный код';
   socket.emit('join', { code, name: nameIn.value }, r => {
     if (!r.ok) return $('err').textContent = r.err;
-    myId = r.id; history.replaceState(null, '', '?code=' + r.code); showScreen('lobby');
+    myId = r.id; myToken = { code: r.code, token: r.token }; history.replaceState(null, '', '?code=' + r.code); showScreen('lobby');
   });
 }
 $('joinBtn').onclick = doJoin;
@@ -4557,7 +4558,27 @@ socket.on('chat', d => {
   while ($('chatlog').children.length > 6) $('chatlog').firstChild.remove();
   setTimeout(() => { el.style.opacity = 0; setTimeout(() => el.remove(), 1000); }, 9000);
 });
-socket.on('disconnect', () => { if (myId) centerMsg('СОЕДИНЕНИЕ ПОТЕРЯНО', 'Обновите страницу, чтобы вернуться', 99999, '#ff7a68'); });
+// ── dropped connection: the game reconnects by itself and takes my place (and my vehicle) back ──
+let wasDisconnected = false;
+socket.on('disconnect', reason => {
+  if (!myId) return;
+  wasDisconnected = true;
+  if (reason === 'io server disconnect') socket.connect();          // the server closed us: dial again anyway
+  centerMsg('СВЯЗЬ ПРЕРВАНА', 'переподключение…', 99999, '#e3a53c');
+});
+socket.on('connect', () => {
+  if (!wasDisconnected || !myToken) return;
+  wasDisconnected = false;
+  socket.emit('rejoin', myToken, r => {
+    if (!r || !r.ok) { centerMsg('СОЕДИНЕНИЕ ПОТЕРЯНО', 'Игра на сервере закончилась — обновите страницу', 99999, '#ff7a68'); return; }
+    const old = myId; myId = r.id;
+    for (const v of vehicles.values()) { if (v.driver === old) v.driver = myId; if (v.gunner === old) v.gunner = myId; if (v.auto === old) v.auto = myId; }
+    centerMsg('СВЯЗЬ ВОССТАНОВЛЕНА', '', 1500, '#9bff7a');
+  });
+});
+socket.on('away', d => { if (d.id !== myId) logMsg('<b>' + esc(d.name) + '</b> — связь прервана, ждём…'); });
+socket.on('rejoined', d => { if (d.id !== myId) logMsg('<b>' + esc(d.name) + '</b> вернулся'); });
+addEventListener('pagehide', () => { if (myId) socket.emit('leaving'); });
 function leaveGame() {
   inGame = false; myVid = null; mode = 'cmd';
   $('ui').classList.remove('on'); $('warn').style.display = 'none'; document.body.classList.remove('cmdv');
