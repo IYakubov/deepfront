@@ -3098,7 +3098,7 @@ addEventListener('keydown', e => {
   const v = myVehicle();
   if (mode === 'drive' && v && v.alive) {
     if (e.code === 'KeyX') leaveVehicle(true);
-    if (e.code === 'KeyP' && v.skin === 'l9' && !mySeat) autopilotOn(v);
+    if (e.code === 'KeyP' && v.skin === 'l9' && !mySeat && !apPick) openApMap(v);
     if ((e.code === 'ShiftLeft' || e.code === 'ShiftRight') && v.type === 'tank') sniper = !sniper;
     if (v.type === 'ship') {
       if (e.code === 'KeyW' || e.code === 'ArrowUp') v.tel = Math.min(SHIP_TEL.length - 1, v.tel + 1);
@@ -3783,11 +3783,11 @@ function updateMe(dt, now) {
 // anyone of the team can climb in at any moment and take over.
 const AUTO_CRUISE = 33.3, AUTO_SEE = 230, AUTO_LOSE = 330;
 const isAuto = v => !!v && v.auto === myId && v.alive && !v.dead && v.vid !== myVid;
-function autopilotOn(v) {
+function autopilotOn(v, dest) {
   if (!v || v.skin !== 'l9' || !v.alive) return;
   socket.emit('autopilot', v.vid);
-  v.auto = myId; v.ai = null;
-  logMsg('<b>Li L9</b> — автопилот: едет в тыл вражеской базы');
+  v.auto = myId; v.ai = null; v.autoDest = dest || null;
+  logMsg('<b>Li L9</b> — автопилот: ' + (dest ? 'едет в указанную точку' : 'едет в тыл вражеской базы'));
   centerMsg('АВТОПИЛОТ', 'машина едет сама — кликните на неё, чтобы снова взять управление', 2500, '#9bff7a');
   leaveVehicle(true);
 }
@@ -3868,8 +3868,16 @@ function autoPath(sx, sz, dx, dz, team) {
   out.reverse();
   return out.filter((p, i) => i % 3 === 2 || i === out.length - 1);
 }
+// the free spot nearest to the point picked on the map
+function autoFreeNear(p) {
+  for (let r = 0; r <= 60; r += 6) for (let k = 0; k < (r ? 16 : 1); k++) {
+    const x = p.x + Math.cos(k / 16 * TAU) * r, z = p.z + Math.sin(k / 16 * TAU) * r;
+    if (H(x, z) > -0.5 && !blocked(x, z, 4, {})) return { x, z };
+  }
+  return { x: p.x, z: p.z };
+}
 function autoRoute(v) {
-  const dest = autoHideSpot(v.team);
+  const dest = v.autoDest ? autoFreeNear(v.autoDest) : autoHideSpot(v.team);
   let pts = autoPath(v.pos.x, v.pos.z, dest.x, dest.z, v.team);
   if (!pts) {                                     // no way found: fall back to the road
     pts = []; const dir = Math.sign(dest.x - v.pos.x) || 1;
@@ -3989,6 +3997,77 @@ function autoShoot(v, t, dt) {
   }
 }
 
+// ── P: a big map with a locator — click where the L9 should drive itself
+let apPick = null;
+const apOk = (x, z) => Math.abs(x) < MAP_X - 60 && z > -MAP_Z + 60 && z < MAP_Z - 20 && H(x, z) > -0.5;
+function openApMap(v) {
+  if (!v || v.skin !== 'l9' || !v.alive || !mmBase) return;
+  apPick = { vid: v.vid, hover: null };
+  if (document.pointerLockElement) { quietUnlock = true; document.exitPointerLock(); }
+  for (const k in keys) keys[k] = false;
+  $('apmap').classList.add('on');
+}
+function closeApMap(relock) { apPick = null; $('apmap').classList.remove('on'); if (relock) lockPointer(); }
+function apWorld(e) {
+  const cv = $('apcv'), r = cv.getBoundingClientRect();
+  return { x: (e.clientX - r.left) / r.width * 2 * MMX - MMX, z: (e.clientY - r.top) / r.height * 2 * MMZ - MMZ };
+}
+function apGo(dest) {
+  const v = apPick && vehicles.get(apPick.vid);
+  closeApMap(false);
+  if (!v || !v.alive || v.vid !== myVid) return;
+  autopilotOn(v, dest);
+}
+$('apcv').addEventListener('mousemove', e => { if (apPick) apPick.hover = apWorld(e); });
+$('apcv').addEventListener('mouseleave', () => { if (apPick) apPick.hover = null; });
+$('apcv').addEventListener('mousedown', e => {
+  if (!apPick) return; e.preventDefault(); e.stopPropagation();
+  if (e.button === 2) { closeApMap(true); return; }
+  const p = apWorld(e);
+  if (!apOk(p.x, p.z)) { centerMsg('ТУДА НЕ ПРОЕХАТЬ', 'выберите точку на суше', 1200, '#ff7a68'); return; }
+  apGo(p);
+});
+$('apcv').addEventListener('contextmenu', e => e.preventDefault());
+$('apBase').onclick = () => apGo(null);
+$('apCancel').onclick = () => closeApMap(true);
+addEventListener('keydown', e => {
+  if (!apPick) return;
+  e.stopImmediatePropagation();                       // the car does not drive while the map is open
+  if (e.code === 'Escape' || e.code === 'KeyP') closeApMap(e.code === 'KeyP');
+  else if (e.code === 'Enter') { e.preventDefault(); apGo(null); }
+}, true);
+function drawApMap() {
+  if (!apPick) return;
+  const v = vehicles.get(apPick.vid);
+  if (!v || !v.alive || v.vid !== myVid || mode !== 'drive') { closeApMap(false); return; }
+  const cv = $('apcv'), c = cv.getContext('2d'), W = cv.width, Hh = cv.height, sx = W / (2 * MMX), sz = Hh / (2 * MMZ);
+  const P = (x, z) => [(x + MMX) * sx, (z + MMZ) * sz];
+  c.drawImage(mmBase, 0, 0, W, Hh);
+  const team = myTeam();
+  for (const o of vehicles.values()) {
+    if (!o.alive || !o.vis.g.visible) continue;
+    if (o.team !== team && !(enemyNear(o) || (o.seen && heatView()))) continue;
+    const [x, y] = P(o.pos.x, o.pos.z), me = o.vid === v.vid;
+    c.fillStyle = me ? '#fff' : o.team === team ? (o.team ? '#8fb8e0' : '#c2d27a') : '#ff5a46';
+    c.beginPath(); c.arc(x, y, me ? 7 : 4, 0, TAU); c.fill();
+    if (me) { c.strokeStyle = '#111'; c.lineWidth = 2; c.stroke(); c.fillStyle = '#fff'; c.font = '600 13px system-ui'; c.fillText('Li L9', x + 10, y + 4); }
+  }
+  // the default target: the back of the enemy base
+  const d = autoHideSpot(v.team), [dx, dy] = P(d.x, d.z);
+  c.strokeStyle = 'rgba(255,255,255,.55)'; c.setLineDash([4, 4]); c.lineWidth = 1.5; c.beginPath(); c.arc(dx, dy, 10, 0, TAU); c.stroke(); c.setLineDash([]);
+  c.fillStyle = 'rgba(255,255,255,.7)'; c.font = '12px system-ui'; c.textAlign = dx > W - 140 ? 'right' : 'left'; c.fillText('тыл врага (Enter)', dx + (dx > W - 140 ? -14 : 13), dy + 4); c.textAlign = 'left';
+  // the locator under the mouse
+  const h = apPick.hover;
+  if (h) {
+    const [x, y] = P(h.x, h.z), ok = apOk(h.x, h.z), col = ok ? '#ffb03a' : '#ff5a46', t = performance.now() / 1000;
+    c.strokeStyle = col; c.lineWidth = 2;
+    c.beginPath(); c.arc(x, y, 14 + Math.sin(t * 6) * 2, 0, TAU); c.stroke();
+    c.beginPath(); c.moveTo(x - 24, y); c.lineTo(x - 7, y); c.moveTo(x + 7, y); c.lineTo(x + 24, y); c.moveTo(x, y - 24); c.lineTo(x, y - 7); c.moveTo(x, y + 7); c.lineTo(x, y + 24); c.stroke();
+    c.fillStyle = col; c.beginPath(); c.arc(x, y, 2.5, 0, TAU); c.fill();
+    c.font = '600 13px system-ui'; c.fillText(ok ? Math.round(Math.hypot(h.x - v.pos.x, h.z - v.pos.z)) + ' м' : 'вода', x + 18, y - 16);
+  }
+}
+
 // ═══════════ COMMANDER VIEW ═══════════
 const cmd = { x: -1200, z: 60, h: 520, tx: -1200, tz: 60, th: 520 };
 let cmdDrag = null, cmdHover = null, camTrans = 0, camTransAt = 0, mouseX = 0, mouseY = 0;
@@ -4076,7 +4155,7 @@ function takeControl(v, seat) {
   camTrans = 1; camTransAt = performance.now(); sniper = false;
   document.body.classList.remove('cmdv');
   $('cmdtip').style.display = 'none'; canvas.style.cursor = '';
-  centerMsg(vName(v).toUpperCase() + (mySeat ? ' · СТРЕЛОК' : ''), mySeat ? 'Мышь — прицел · клик — огонь · колесо вниз — выйти' : v.skin === 'l9' ? 'WASD — ехать · мышь и клик — пулемёт · P — автопилот в тыл врага' : v.type === 'moto' ? 'WASD — ехать · мышь и клик — пулемёт · второй игрок может сесть стрелком' : v.type === 'plane' ? 'W — тяга · разгон и мышь вверх' : v.type === 'gunner' ? 'Мышь — прицел · клик — огонь · колесо вниз — выйти' : v.type === 'icbm' ? 'WASD — ехать · остановитесь и ПКМ — наведение ракеты' : v.type === 'drone' ? 'W — взлёт · летит за мышью · взрывается при ударе' : v.type === 'soldier' ? 'WASD — идти · Shift — бег · клик — огонь · ПКМ — прицел · R — перезарядка' : 'Колесо вниз — наверх, к выбору техники', 1500);
+  centerMsg(vName(v).toUpperCase() + (mySeat ? ' · СТРЕЛОК' : ''), mySeat ? 'Мышь — прицел · клик — огонь · колесо вниз — выйти' : v.skin === 'l9' ? 'WASD — ехать · мышь и клик — пулемёт · P — автопилот (точка на карте)' : v.type === 'moto' ? 'WASD — ехать · мышь и клик — пулемёт · второй игрок может сесть стрелком' : v.type === 'plane' ? 'W — тяга · разгон и мышь вверх' : v.type === 'gunner' ? 'Мышь — прицел · клик — огонь · колесо вниз — выйти' : v.type === 'icbm' ? 'WASD — ехать · остановитесь и ПКМ — наведение ракеты' : v.type === 'drone' ? 'W — взлёт · летит за мышью · взрывается при ударе' : v.type === 'soldier' ? 'WASD — идти · Shift — бег · клик — огонь · ПКМ — прицел · R — перезарядка' : 'Колесо вниз — наверх, к выбору техники', 1500);
   lockPointer();
 }
 function leaveVehicle(force) {
@@ -4455,6 +4534,12 @@ function drawMinimap() {
   for (const s of shots) if (s.k === 'icbm') { const [x, y] = mmP(s.target.x, s.target.z), [mx, my] = mmP(s.pos.x, s.pos.z); const pr = 8 + (performance.now() / 120) % 14;
     c.strokeStyle = '#ff3a26'; c.lineWidth = 3; c.beginPath(); c.arc(x, y, pr, 0, TAU); c.stroke(); c.fillStyle = '#ff3a26'; c.beginPath(); c.arc(x, y, 4, 0, TAU); c.fill(); c.fillStyle = '#fff'; c.fillRect(mx - 3, my - 3, 6, 6); }
   const tv = myVehicle(); if (tv && tv.tmode) { const [x, y] = mmP(tv.tgt.x, tv.tgt.z); c.strokeStyle = '#ffb03a'; c.lineWidth = 2; c.beginPath(); c.moveTo(x - 9, y); c.lineTo(x + 9, y); c.moveTo(x, y - 9); c.lineTo(x, y + 9); c.stroke(); }
+  // where my autopilot cars are heading
+  for (const o of vehicles.values()) if (isAuto(o) && o.ai && o.ai.dest) {
+    const [x, y] = mmP(o.ai.dest.x, o.ai.dest.z), [ox, oy] = mmP(o.pos.x, o.pos.z);
+    c.strokeStyle = 'rgba(255,176,58,.6)'; c.setLineDash([3, 4]); c.lineWidth = 1.5; c.beginPath(); c.moveTo(ox, oy); c.lineTo(x, y); c.stroke(); c.setLineDash([]);
+    c.strokeStyle = '#ffb03a'; c.lineWidth = 2; c.beginPath(); c.arc(x, y, 6, 0, TAU); c.moveTo(x - 10, y); c.lineTo(x + 10, y); c.moveTo(x, y - 10); c.lineTo(x, y + 10); c.stroke();
+  }
   if (mode === 'cmd') { const [x, y] = mmP(cmd.x, cmd.z); const ww = cmd.h * 1.2 / (2 * MMX) * MMW; c.strokeStyle = 'rgba(255,255,255,.7)'; c.lineWidth = 1.5; c.strokeRect(x - ww, y - ww * 0.7, ww * 2, ww * 1.4); }
 }
 mm.addEventListener('mousedown', e => {
@@ -4705,6 +4790,7 @@ function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
   if (inGame) adaptRes(dt);
+  if (apPick) drawApMap();
   waterUniforms.uTime.value = now / 1000;
   updateBaseAlarm(now);
   if (inGame && world) {
