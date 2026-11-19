@@ -43,6 +43,13 @@ input.txt:focus{border-color:var(--acc)}
 .modes button{flex:1;padding:12px;border-radius:10px;border:1px solid var(--line);background:rgba(255,255,255,.04);color:var(--dim);font:700 11px Unbounded;letter-spacing:.12em;cursor:pointer}
 .modes button.on{background:rgba(227,165,60,.15);border-color:var(--acc);color:var(--txt)}
 .modes button:disabled{cursor:default}
+.maps{display:flex;gap:10px;margin:0 0 16px}
+.maps button{flex:1;display:flex;flex-direction:column;gap:4px;padding:8px;border-radius:12px;border:1px solid var(--line);background:rgba(255,255,255,.04);color:var(--dim);text-align:left;cursor:pointer;font:500 11px/1.35 system-ui,sans-serif}
+.maps button img{width:100%;aspect-ratio:1040/720;object-fit:cover;border-radius:8px;opacity:.75}
+.maps button b{font:700 12px Unbounded;letter-spacing:.06em;color:var(--txt)}
+.maps button.on{background:rgba(227,165,60,.15);border-color:var(--acc)}
+.maps button.on img{opacity:1}
+.maps button:disabled{cursor:default}
 .teams{display:flex;gap:12px}
 .team{flex:1;background:rgba(0,0,0,.25);border:1px solid var(--line);border-radius:12px;padding:12px;min-height:150px}
 .team h4{font-size:11px;letter-spacing:.25em;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center}
@@ -201,6 +208,8 @@ body.cmdv #bottom{display:none}
       <button data-mode="team" id="mTeam">База против базы · бой до последней машины</button>
       <button data-mode="ffa" id="mFfa" style="display:none">-</button>
     </div>
+    <div class="small" style="margin-bottom:8px">Карта</div>
+    <div class="maps" id="maps"></div>
     <div class="teams" id="teams"></div>
     <div class="row" style="margin-top:18px">
       <button class="btn ghost" id="leaveBtn">Выйти</button>

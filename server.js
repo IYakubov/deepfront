@@ -45,6 +45,7 @@ const LAYOUT = [
   ['gunner', -985, 40, Math.PI / 2], ['gunner', -1010, 215, Math.PI / 2], ['gunner', -1150, 405, 0],
 ];
 
+const MAPS = ['valley', 'ice'];       // Долина, Ледяной остров
 const rooms = new Map();
 
 function newCode() {
@@ -71,7 +72,7 @@ function makeVehicles() {
 }
 function publicRoom(r) {
   return {
-    code: r.code, hostId: r.hostId, state: r.state, mode: 'team', seed: r.seed, tickets: r.tickets,
+    code: r.code, hostId: r.hostId, state: r.state, mode: 'team', map: r.map || 'valley', seed: r.seed, tickets: r.tickets,
     timeLeft: r.endsAt && r.state === 'playing' ? Math.max(0, r.endsAt - Date.now()) : null,
     players: [...r.players.values()].map(p => ({ id: p.id, name: p.name, team: p.team, away: !!p.away, vid: p.vid, kills: p.kills, deaths: p.deaths, dmg: Math.round(p.dmg) })),
     vehicles: r.vehicles.map(v => ({ vid: v.vid, team: v.team, type: v.type, skin: v.skin || null, n: v.n, hp: v.hp, max: v.max, alive: v.alive, ammo: v.ammo, spent: v.spent, driver: v.driver, gunner: v.gunner || null, auto: v.auto || null, spawn: v.spawn, st: v.st, })),
@@ -223,7 +224,7 @@ io.on('connection', socket => {
   socket.on('create', (d, cb) => {
     if (room) return cb && cb({ ok: false, err: 'Вы уже в комнате' });
     const code = newCode();
-    const r = { code, hostId: socket.id, players: new Map(), state: 'lobby', seed: Math.floor(Math.random() * 1e9), tickets: [MACHINES, MACHINES], vehicles: makeVehicles(), hangars: makeHangars(), endsAt: null };
+    const r = { code, hostId: socket.id, players: new Map(), state: 'lobby', map: 'valley', seed: Math.floor(Math.random() * 1e9), tickets: [MACHINES, MACHINES], vehicles: makeVehicles(), hangars: makeHangars(), endsAt: null };
     r.lastActive = Date.now();
     rooms.set(code, r);
     const token = attach(r, d && d.name);
@@ -243,6 +244,11 @@ io.on('connection', socket => {
     if (r.state === 'playing') socket.emit('lateJoin', {});
   });
   socket.on('setMode', () => {});
+  // the host picks the map in the lobby
+  socket.on('setMap', m => {
+    if (!room || room.hostId !== socket.id || room.state === 'playing' || !MAPS.includes(m)) return;
+    room.map = m; broadcastRoom(room);
+  });
   socket.on('setTeam', t => {
     if (!room || room.state === 'playing') return;
     const p = me();

@@ -137,6 +137,10 @@ function renderLobby() {
   } else {
     $('teams').innerHTML = `<div class="team"><h4>ВСЕ ПРОТИВ ВСЕХ · ${room.players.length}/10</h4>${room.players.map(chip).join('')}</div>`;
   }
+  // map choice (the host picks)
+  const cur = room.map || 'valley';
+  $('maps').innerHTML = MAP_LIST.map(m => `<button data-map="${m.id}" class="${m.id === cur ? 'on' : ''}" ${isHost() ? '' : 'disabled'}><img src="maps/${m.id}.jpg?v=${ASSET_V}" alt=""><b>${m.name}</b><span>${m.desc}</span></button>`).join('');
+  $('maps').querySelectorAll('button').forEach(b => b.onclick = () => { if (isHost() && b.dataset.map !== cur) socket.emit('setMap', b.dataset.map); });
   $('startBtn').disabled = !isHost();
   $('startBtn').textContent = isHost() ? (room.players.length < 2 ? 'Начать (тренировка)' : 'Начать бой') : 'Ожидание хоста…';
 }
@@ -476,16 +480,145 @@ function camFade(mat, near, far) {
   mat.customProgramCacheKey = () => 'cf' + near + '_' + far;
   return mat;
 }
-const waterUniforms = { uTime: { value: 0 } };
-const coastZ = x => 440 + Math.sin(x * 0.0023) * 55 + Math.sin(x * 0.007 + 1) * 15;
-const teamX = (team, x) => team === 0 ? x : -x;
-const roadZ = x => 60 + Math.sin(x * 0.004) * 80;
-// fixed town sites (the terrain is flattened under them; the same every match)
-const TOWN_PADS = [
-  { id: 'country', x: 30, z: -200, hx: 26, hz: 26 },
-  { id: 'vil0', x: -560, z: -260, hx: 88, hz: 90 },
-  { id: 'vil1', x: 560, z: -260, hx: 88, hz: 90 },
+
+// ═══════════ MAPS ═══════════
+// 'valley' — the first map (hills, sea in the south); 'ice' — Ледяной остров: a winter island with three
+// mountain ranges in the middle, low canyons between them, dirt tracks around. Both keep the same bases,
+// runways, hangars and ports, so the vehicle layout on the server is shared.
+const MAP_LIST = [
+  { id: 'valley', name: 'Долина', desc: 'Холмы, городки и море на юге' },
+  { id: 'ice', name: 'Ледяной остров', desc: 'Зима, горы в центре, ущелья для полётов под ПВО' },
 ];
+let MAP_ID = 'valley';
+const mapName = id => (MAP_LIST.find(m => m.id === id) || MAP_LIST[0]).name;
+
+// ── Ледяной остров ──
+const ICE = {
+  ranges: [   // mountain ridges (x, z), west → east
+    [[-700, -470], [-430, -420], [-180, -510], [60, -430], [330, -510], [640, -430]],
+    [[-700, 40], [-440, -10], [-150, 80], [150, 0], [430, 70], [700, 30]],
+    [[-640, 500], [-400, 560], [-130, 480], [150, 550], [420, 480], [640, 540]],
+  ],
+  canyons: [  // valley floors (low-flying routes)
+    [[-1000, -200], [-700, -225], [-420, -190], [-150, -245], [150, -200], [450, -245], [700, -205], [1000, -215]],
+    [[-1000, 280], [-700, 260], [-430, 295], [-150, 250], [150, 295], [440, 250], [700, 285], [1000, 270]],
+    [[-120, -1080], [-130, -840], [-60, -640], [-150, -245]],
+  ],
+  roads: [    // packed-snow dirt tracks: a ring around the mountains + spurs
+    [[-980, -420], [-760, -760], [-380, -900], [0, -930], [380, -900], [760, -760], [980, -420], [1010, -60], [980, 330], [800, 760], [420, 900], [0, 960], [-420, 900], [-800, 760], [-980, 330], [-1010, -60], [-980, -420]],
+    [[-1010, -60], [-1150, -60]], [[1010, -60], [1150, -60]], [[-980, 330], [-1060, 300]], [[980, 330], [1060, 300]],
+    [[-760, -760], [-560, -800]], [[760, -760], [560, -800]], [[0, 960], [0, 880]],
+  ],
+  towns: [ { id: 'country', x: 0, z: 930, hx: 26, hz: 26 }, { id: 'vil0', x: -600, z: -850, hx: 88, hz: 90 }, { id: 'vil1', x: 600, z: -850, hx: 88, hz: 90 } ],
+  sams: [[-560, -440], [-560, 40], [-520, 510]],     // team 0 targets; the site goes on the highest point nearby
+  coastZ: x => { const g = ICE.coast; if (!g) return 600; const i = Math.max(0, Math.min(g.length - 1, Math.round((x + MAP_X + 500) / 10))); return g[i]; },
+  grid: null,
+};
+function catmullPts(pts, n = 10) {
+  const out = [], p = [pts[0], ...pts, pts[pts.length - 1]];
+  for (let i = 1; i < p.length - 2; i++) for (let k = 0; k < n; k++) {
+    const t = k / n, t2 = t * t, t3 = t2 * t, q = j => 0.5 * (2 * p[i][j] + (-p[i - 1][j] + p[i + 1][j]) * t + (2 * p[i - 1][j] - 5 * p[i][j] + 4 * p[i + 1][j] - p[i + 2][j]) * t2 + (-p[i - 1][j] + 3 * p[i][j] - 3 * p[i + 1][j] + p[i + 2][j]) * t3);
+    out.push([q(0), q(1)]);
+  }
+  out.push(pts[pts.length - 1]); return out;
+}
+function segDist(x, z, pts) {
+  let d = 1e9;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const [x1, z1] = pts[i], [x2, z2] = pts[i + 1], dx = x2 - x1, dz = z2 - z1, L = dx * dx + dz * dz || 1;
+    const t = Math.max(0, Math.min(1, ((x - x1) * dx + (z - z1) * dz) / L));
+    const ex = x - x1 - t * dx, ez = z - z1 - t * dz, e = ex * ex + ez * ez; if (e < d) d = e;
+  }
+  return Math.sqrt(d);
+}
+// the height of the island, computed once into a 6 m grid (H samples it)
+const ICE_CELL = 8, ICE_X0 = -MAP_X - 500, ICE_Z0 = -MAP_Z - 500, ICE_NX = Math.ceil((MAP_X * 2 + 1000) / ICE_CELL) + 1, ICE_NZ = Math.ceil((MAP_Z * 2 + 1000) / ICE_CELL) + 1;
+function iceGrid() {
+  if (ICE.grid) return ICE.grid;
+  const n1 = makeNoise(mulberry32(911)), n2 = makeNoise(mulberry32(912)), n3 = makeNoise(mulberry32(913));
+  const fbm = (n, x, z, o) => { let s = 0, a = 1, t = 0; for (let i = 0; i < o; i++) { s += n(x, z) * a; t += a; a *= .5; x *= 2.03; z *= 2.03; } return s / t; };
+  const ridged = (x, z) => { let s = 0, a = 1, t = 0; for (let i = 0; i < 6; i++) { const v = 1 - Math.abs(n1(x, z) * 2 - 1); s += v * a; t += a; a *= .5; x *= 2.07; z *= 2.07; } return s / t; };
+  const ranges = ICE.ranges.map(r => catmullPts(r, 5)), canyons = ICE.canyons.map(c => catmullPts(c, 4));
+  const bbox = (pts, m) => { let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9; for (const [x, z] of pts) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z); } return [x0 - m, x1 + m, z0 - m, z1 + m]; };
+  const rbox = ranges.map(r => bbox(r, 470)), cbox = canyons.map(c => bbox(c, 115));
+  const inB = (b, x, z) => x > b[0] && x < b[1] && z > b[2] && z < b[3];
+  const g = new Float32Array(ICE_NX * ICE_NZ);
+  for (let j = 0; j < ICE_NZ; j++) for (let i = 0; i < ICE_NX; i++) {
+    const x = ICE_X0 + i * ICE_CELL, z = ICE_Z0 + j * ICE_CELL, ax = Math.abs(x);
+    // island outline: south coast (bulges out in the middle), north coast, the two ends
+    // a rounded island with a harbour bay below each base (the ships start there)
+    const wob = (fbm(n2, x * 0.004, z * 0.004, 3) - .5) * 110;
+    const Ri = Math.pow(ax / 1570, 2.6) + Math.pow(Math.abs(z - 10) / 1075, 2.2);
+    let dc = (1 - Ri) * 430 + wob * (Math.hypot(ax - 1200, z - 60) < 420 ? 0.15 : 1);
+    dc = Math.min(dc, (Math.hypot(ax - 1215 + (z - 660) * 0.25, (z - 660) / 1.25) - 190 + wob * 0.6) * 1.4);
+    let h = 7 + fbm(n2, x * 0.003 + 5, z * 0.003, 4) * 22;
+    // mountains: ridged fractal inside the range masks
+    let mask = 0;
+    for (let r = 0; r < ranges.length; r++) {
+      if (!inB(rbox[r], x, z)) continue;
+      const d = segDist(x, z, ranges[r]), w = 150 * (0.45 + 1.1 * fbm(n3, x * 0.006 + r * 7, z * 0.006, 4));
+      mask = Math.max(mask, Math.pow(smooth(w * 1.5, w * 0.1, d), 1.4) + 0.2 * smooth(w * 2.1, w * 1.1, d));
+    }
+    mask = Math.min(1, mask) * smooth(830 + (n3(x * 0.005, z * 0.005 + 9) - .5) * 300, 520, ax);
+    if (mask > 0) h += Math.pow(mask, 0.9) * (80 + 600 * Math.pow(ridged(x * 0.0042, z * 0.0042), 1.7) * (0.55 + 0.7 * fbm(n3, x * 0.0038 + 3, z * 0.0038 - 4, 3)));
+    // canyon floors
+    for (let ci = 0; ci < canyons.length; ci++) { const c = canyons[ci]; if (!inB(cbox[ci], x, z)) continue; const k = smooth(110, 15, segDist(x, z, c)); if (k > 0) h = h * (1 - .8 * k) + (40 + 10 * n2(x * 0.008, z * 0.008)) * .8 * k; }
+    // flat bases and runways (same as the first map)
+    let flat = 0;
+    for (const b of BASES) flat = Math.max(flat, 1 - smooth(BASE_R + 50, BASE_R + 190, Math.hypot(x - b.x, z - b.z)));
+    if (ax > RWY.x0 - 60 && ax < RWY.x1 + 60) flat = Math.max(flat, 1 - smooth(RWY.w, RWY.w + 70, Math.abs(z - RWY.z)));
+    h = lerp(h, BASE_Y, flat);
+    // coast and sea
+    if (dc < 60) h = lerp(h, 1.2, smooth(60, 0, dc));
+    if (dc < 0) h = Math.max(-26, 1.2 + dc * 0.17);
+    g[j * ICE_NX + i] = h;
+  }
+  ICE.grid = g;
+  // the south coast line (for the ports): first water south of the middle of the island, every 10 m
+  const cs = new Float32Array(Math.ceil((MAP_X * 2 + 1000) / 10) + 1);
+  for (let k = 0; k < cs.length; k++) { const x = -MAP_X - 500 + k * 10; let z = 100; while (z < MAP_Z + 400 && iceH(x, z) > 0) z += 4; cs[k] = z; }
+  ICE.coast = cs;
+  return g;
+}
+function iceH(x, z) {
+  const g = ICE.grid, fx = (x - ICE_X0) / ICE_CELL, fz = (z - ICE_Z0) / ICE_CELL;
+  if (fx < 0 || fz < 0 || fx >= ICE_NX - 1 || fz >= ICE_NZ - 1) return -26;
+  const i = fx | 0, j = fz | 0, u = fx - i, w = fz - j, k = j * ICE_NX + i;
+  return (g[k] * (1 - u) + g[k + 1] * u) * (1 - w) + (g[k + ICE_NX] * (1 - u) + g[k + ICE_NX + 1] * u) * w;
+}
+const iceRoadSegs = () => ICE.roadSegs || (ICE.roadSegs = ICE.roads.map(r => catmullPts(r, 14)));
+const nearIceRoad = (x, z, m) => iceRoadSegs().some(r => segDist(x, z, r) < m);
+
+const VALLEY_PADS = TOWN_PADS_INIT();
+function TOWN_PADS_INIT() {
+  return [
+    { id: 'country', x: 30, z: -200, hx: 26, hz: 26 },
+    { id: 'vil0', x: -560, z: -260, hx: 88, hz: 90 },
+    { id: 'vil1', x: 560, z: -260, hx: 88, hz: 90 },
+  ];
+}
+// switch the map: the world is rebuilt right after
+function applyMap(id) {
+  MAP_ID = MAP_LIST.some(m => m.id === id) ? id : 'valley';
+  const ice = MAP_ID === 'ice';
+  TOWN_PADS.length = 0;
+  for (const p of (ice ? ICE.towns : VALLEY_PADS)) TOWN_PADS.push(Object.assign({}, p));
+  coastZ = ice ? ICE.coastZ : VALLEY_COAST;
+  roadZ = ice ? () => 1e6 : VALLEY_ROAD;
+  const sky = new THREE.Color(ice ? 0xb4bfc7 : 0xa3aaae);
+  SKY.copy(sky); scene.fog.color.copy(sky);
+  scene.fog.near = ice ? 420 : 520; scene.fog.far = ice ? 2500 : 2700;
+  hemi.color.set(ice ? 0xe4ecf2 : 0xdde2e5); hemi.groundColor.set(ice ? 0x8a929a : 0x504d42);
+  if (ice) iceGrid();
+}
+const waterUniforms = { uTime: { value: 0 } };
+const VALLEY_COAST = x => 440 + Math.sin(x * 0.0023) * 55 + Math.sin(x * 0.007 + 1) * 15;
+let coastZ = VALLEY_COAST;
+const teamX = (team, x) => team === 0 ? x : -x;
+const VALLEY_ROAD = x => 60 + Math.sin(x * 0.004) * 80;
+let roadZ = VALLEY_ROAD;
+// fixed town sites (the terrain is flattened under them; the same every match)
+const TOWN_PADS = TOWN_PADS_INIT();
 const inPad = (x, z, m = 0) => TOWN_PADS.some(p => Math.abs(x - p.x) < p.hx + m && Math.abs(z - p.z) < p.hz + m);
 const onBasePad = (x, z) => BASES.some(b => Math.hypot(x - b.x, z - b.z) < BASE_R + 15) || (Math.abs(x) > RWY.x0 - 50 && Math.abs(z - RWY.z) < RWY.w + 25);
 
@@ -494,7 +627,9 @@ function buildWorld(seed) {
   const rand = mulberry32(seed);
   const n1 = makeNoise(mulberry32(777)), n2 = makeNoise(mulberry32(778));   // terrain is the same every match
   const fbm = (x, z) => { let s = 0, a = 1, f = 1; for (let i = 0; i < 5; i++) { s += (n1(x * f, z * f) - .5) * a; a *= .5; f *= 2.03; } return s; };
-  H = (x, z) => {
+  const ICEMAP = MAP_ID === 'ice';
+  if (ICEMAP) H = iceH;
+  else H = (x, z) => {
     // rolling hills, flattened at both bases and their runways
     let h = BASE_Y + Math.max(-3, fbm(x * 0.0024 + 3, z * 0.0024 - 2) * 85 + 10);
     let flat = 0;
@@ -544,9 +679,24 @@ function buildWorld(seed) {
   const cols = new Float32Array(p2.count * 3);
   const cG1 = new THREE.Color(1.22, 1.24, 1.12), cG2 = new THREE.Color(1.34, 1.28, 1.08), cDirt = new THREE.Color(1.3, 1.12, 0.92), cRock = new THREE.Color(1.15, 1.12, 1.08),
         cSand = new THREE.Color(1.9, 1.75, 1.3), cWet = new THREE.Color(1.1, 1.02, 0.86), cBase = new THREE.Color(1.15, 1.13, 1.1), cSnow = new THREE.Color(2.6, 2.65, 2.7), c = new THREE.Color();
+  const cIce = new THREE.Color(0.8, 0.82, 0.86), cIce2 = new THREE.Color(0.72, 0.76, 0.82), cGrassW = new THREE.Color(0.5, 0.5, 0.4), cRockW = new THREE.Color(0.33, 0.34, 0.37),
+        cPeak = new THREE.Color(0.9, 0.92, 0.96), cBaseW = new THREE.Color(0.6, 0.6, 0.6), cShore = new THREE.Color(0.55, 0.57, 0.6);
   for (let i = 0; i < p2.count; i += 3) {
     const x = (p2.getX(i) + p2.getX(i + 1) + p2.getX(i + 2)) / 3, y = (p2.getY(i) + p2.getY(i + 1) + p2.getY(i + 2)) / 3, z = (p2.getZ(i) + p2.getZ(i + 1) + p2.getZ(i + 2)) / 3;
     const slope = 1 - nrm.getY(i);
+    if (ICEMAP) {   // snow everywhere, grey rock on the steep slopes, a little dead grass showing through on the plains
+      c.copy(cIce).lerp(cIce2, n2(x * 0.004, z * 0.004));
+      if (y > 3 && y < 60 && n2(x * 0.012 + 4, z * 0.012) > 0.66) c.lerp(cGrassW, 0.55);
+      if (slope > 0.22) c.lerp(cRockW, Math.min(1, (slope - 0.22) * 2.6) * (1 - 0.55 * smooth(330, 470, y)));
+      if (y > 300) c.lerp(cPeak, smooth(300, 420, y) * 0.7);
+      for (const b of BASES) if (Math.hypot(x - b.x, z - b.z) < BASE_R) c.lerp(cBaseW, 0.45);
+      if (inPad(x, z, -4)) c.lerp(cBaseW, 0.3);
+      if (y < 3) c.lerp(cShore, smooth(3, 1, y));
+      if (y < 0) c.copy(cWet);
+      c.multiplyScalar(0.96 + rand() * 0.06);
+      for (let k = 0; k < 3; k++) { cols[(i + k) * 3] = c.r; cols[(i + k) * 3 + 1] = c.g; cols[(i + k) * 3 + 2] = c.b; }
+      continue;
+    }
     c.copy(cG1).lerp(cG2, n2(x * 0.004, z * 0.004));
     if (n2(x * 0.02 + 9, z * 0.02) > 0.7) c.lerp(cDirt, 0.6);
     if (slope > 0.18) c.lerp(cRock, Math.min(1, (slope - 0.18) * 3));
@@ -566,14 +716,15 @@ function buildWorld(seed) {
   tmat.onBeforeCompile = sh => { sh.fragmentShader = sh.fragmentShader.replace('#include <map_fragment>', `
     vec4 sampledDiffuseColor = texture2D( map, vMapUv );
     vec4 tex2 = texture2D( map, vMapUv * 0.213 + vec2(0.37, 0.71) );
-    diffuseColor *= mix( sampledDiffuseColor, tex2, 0.45 );`); };
+    diffuseColor *= mix( vec4(1.0), mix( sampledDiffuseColor, tex2, 0.45 ) * ${ICEMAP ? '2.6' : '1.0'}, ${ICEMAP ? '0.3' : '1.0'} );`); };
+  tmat.customProgramCacheKey = () => 'terrain_' + MAP_ID;
   const terrain = new THREE.Mesh(geo, tmat);
   terrain.receiveShadow = true;
   group.add(terrain);
 
   // ── sea ──
-  const wgeo = new THREE.PlaneGeometry(SX + 2000, 2400, 160, 70); wgeo.rotateX(-Math.PI / 2); wgeo.translate(0, 0, MAP_Z);
-  const wmat = new THREE.MeshStandardMaterial({ color: 0x3f6d78, roughness: .35, metalness: .15, flatShading: true, transparent: true, opacity: .9 });
+  const wgeo = ICEMAP ? new THREE.PlaneGeometry(SX + 2000, SZ + 2000, 200, 140) : new THREE.PlaneGeometry(SX + 2000, 2400, 160, 70); wgeo.rotateX(-Math.PI / 2); if (!ICEMAP) wgeo.translate(0, 0, MAP_Z);
+  const wmat = new THREE.MeshStandardMaterial({ color: ICEMAP ? 0x3b5f74 : 0x3f6d78, roughness: .35, metalness: .15, flatShading: true, transparent: true, opacity: .9 });
   wmat.onBeforeCompile = sh => {
     sh.uniforms.uTime = waterUniforms.uTime;
     sh.vertexShader = 'uniform float uTime;\n' + sh.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
@@ -706,8 +857,13 @@ function buildWorld(seed) {
     winBox(PORT[team].x - sx * 40, coastZ(PORT[team].x) - 30, 26, 18, H(PORT[team].x - sx * 40, coastZ(PORT[team].x) - 30) + 5);
     for (let i = 0; i < 8; i++) PR.crate.push([PORT[team].x - 3 + (i % 2) * 2.2, 2.4 + (i > 5 ? 1.7 : 0), coastZ(PORT[team].x) + 20 + (i >> 1) * 2.4, 0, 1]);
     // ПВО sites
-    for (const [x0, z0] of SAMS) {
-      const x = teamX(team, x0), z = z0, y = H(x, z);
+    const samSpots = ICEMAP ? ICE.sams.map(([x0, z0]) => {      // the highest point near each target
+      let bx = teamX(team, x0), bz = z0, by = -1e9;
+      for (let dx = -150; dx <= 150; dx += 10) for (let dz = -150; dz <= 150; dz += 10) { const xx = teamX(team, x0) + dx, zz = z0 + dz, yy = H(xx, zz); if (yy > by) { by = yy; bx = xx; bz = zz; } }
+      return [bx, bz];
+    }) : SAMS.map(([x0, z0]) => [teamX(team, x0), z0]);
+    for (const [x, z] of samSpots) {
+      const y = H(x, z);
       const g = new THREE.Group(); g.position.set(x, y, z); group.add(g);
       const pad = new THREE.Mesh(new THREE.CylinderGeometry(11, 13, 1.6, 10), mConc); pad.receiveShadow = true; g.add(pad);
       const base = new THREE.Mesh(new THREE.BoxGeometry(5, 2, 7.5), M(0x5d6640)); base.position.set(0, 1.8, 0); base.castShadow = true; g.add(base);
@@ -726,25 +882,43 @@ function buildWorld(seed) {
   const crownGeo = new THREE.ConeGeometry(2.8, 9, 6); crownGeo.translate(0, 7, 0);
   const trunkGeo = new THREE.CylinderGeometry(.35, .5, 3.4, 5); trunkGeo.translate(0, 1.7, 0);
   const trees = [];
-  const clusters = Array.from({ length: 70 }, () => [(rand() * 2 - 1) * (MAP_X - 200), (rand() * 2 - 1) * 700 - 250]);
+  const clusters = ICEMAP ? Array.from({ length: 95 }, () => [(rand() * 2 - 1) * (MAP_X - 150), (rand() * 2 - 1) * (MAP_Z - 80)]) : Array.from({ length: 70 }, () => [(rand() * 2 - 1) * (MAP_X - 200), (rand() * 2 - 1) * 700 - 250]);
   for (let i = 0; i < 40000 && trees.length < 4200; i++) {
     const cl = clusters[i % clusters.length];
     const x = cl[0] + (rand() - .5) * 220, z = cl[1] + (rand() - .5) * 220, y = H(x, z);
-    if (y < 3 || y > 160) continue;
+    if (y < 3 || y > (ICEMAP ? 240 : 160)) continue;
+    if (ICEMAP && (Math.abs(H(x + 6, z) - y) > 5 || Math.abs(H(x, z + 6) - y) > 5 || nearIceRoad(x, z, 12))) continue;
     if (BASES.some(b => Math.hypot(x - b.x, z - b.z) < BASE_R + 90)) continue;
     if (Math.abs(x) < 1020 && Math.abs(z - roadZ(x)) < 11) continue;
     if (Math.abs(x) > RWY.x0 - 80 && Math.abs(z - RWY.z) < 110) continue;
     if (boxes.some(b => Math.abs(b.x - x) < b.hx + 4 && Math.abs(b.z - z) < b.hz + 4) || inPad(x, z, 12)) continue;
     trees.push({ x, y, z, s: 0.8 + rand() * 0.8, r: rand() * TAU });
   }
-  const pineMat = camFade(M(0x4b5e36, { roughness: 1 }), 3, 10), trunkMat = M(0x5a4a3a);
+  const pineMat = camFade(M(ICEMAP ? 0x3d5446 : 0x4b5e36, { roughness: 1 }), 3, 10), trunkMat = M(0x5a4a3a);
   const tr = new THREE.InstancedMesh(trunkGeo, trunkMat, trees.length), cr = new THREE.InstancedMesh(crownGeo, pineMat, trees.length);
   trees.forEach((t, i) => { dummy.position.set(t.x, t.y - .3, t.z); dummy.rotation.set(0, t.r, 0); dummy.scale.setScalar(t.s); dummy.updateMatrix(); tr.setMatrixAt(i, dummy.matrix); cr.setMatrixAt(i, dummy.matrix); });
   cr.castShadow = true;
   const treeProc = new THREE.Group(); treeProc.add(tr, cr); group.add(treeProc);
 
-  // ── dirt road between the bases, telegraph poles ──
-  { const pts = [], idx = []; let n = 0;
+  // ── dirt road between the bases, telegraph poles (Ледяной остров: tracks around the mountains) ──
+  if (ICEMAP) {
+    const rmat = new THREE.MeshStandardMaterial({ color: 0x7d6a55, roughness: 1, polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3 });
+    for (const line of iceRoadSegs()) {
+      const pts = [], idx = []; let n = 0;
+      const dense = []; for (let k = 0; k < line.length - 1; k++) { const [x1, z1] = line[k], [x2, z2] = line[k + 1], L = Math.hypot(x2 - x1, z2 - z1), m = Math.max(1, Math.ceil(L / 6)); for (let q = 0; q < m; q++) dense.push([x1 + (x2 - x1) * q / m, z1 + (z2 - z1) * q / m]); }
+      dense.push(line[line.length - 1]);
+      for (let k = 0; k < dense.length; k++) {
+        const [x, z] = dense[k], [xa, za] = dense[Math.max(0, k - 1)], [xb, zb] = dense[Math.min(dense.length - 1, k + 1)];
+        let tx = xb - xa, tz = zb - za; const tl = Math.hypot(tx, tz) || 1; tx /= tl; tz /= tl;
+        const nx = -tz * 4.5, nz = tx * 4.5, y = Math.max(H(x, z), H(x + nx, z + nz), H(x - nx, z - nz)) + 0.3;
+        pts.push(x + nx, y, z + nz, x - nx, y, z - nz);
+        if (n) idx.push(n * 2 - 2, n * 2 - 1, n * 2, n * 2 - 1, n * 2 + 1, n * 2);
+        n++;
+      }
+      const rg = new THREE.BufferGeometry(); rg.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3)); rg.setIndex(idx); rg.computeVertexNormals();
+      const road = new THREE.Mesh(rg, rmat); road.receiveShadow = true; group.add(road);
+    }
+  } else { const pts = [], idx = []; let n = 0;
     for (let x = -1000; x <= 1000; x += 8) {
       const z = roadZ(x), y = Math.max(H(x, z), H(x, z - 5), H(x, z + 5)) + 0.35;
       pts.push(x, y, z - 5.5, x, y, z + 5.5);
@@ -756,8 +930,9 @@ function buildWorld(seed) {
     for (let x = -960; x <= 960; x += 64) { const z = roadZ(x) + 10; PR.pole.push([x, H(x, z) + 4, z, 0, 1]); }
   }
   // ── bushes, boulders, hay bales, clouds ──
-  for (let i = 0; i < 9000 && PR.bush.length < 2200; i++) {
-    const x = (rand() * 2 - 1) * (MAP_X - 100), z = (rand() * 2 - 1) * 760 - 240, y = H(x, z);
+  for (let i = 0; i < 9000 && PR.bush.length < (ICEMAP ? 700 : 2200); i++) {
+    const x = (rand() * 2 - 1) * (MAP_X - 100), z = ICEMAP ? (rand() * 2 - 1) * (MAP_Z - 60) : (rand() * 2 - 1) * 760 - 240, y = H(x, z);
+    if (ICEMAP && (y > 200 || nearIceRoad(x, z, 7))) continue;
     if (y < 3 || y > 170 || onBasePad(x, z) || Math.abs(z - roadZ(x)) < 8 || inPad(x, z, 6)) continue;
     PR.bush.push([x, y + 0.5, z, rand() * 3, 0.6 + rand() * 1.1]);
   }
@@ -766,7 +941,7 @@ function buildWorld(seed) {
     if (y < 1 || onBasePad(x, z) || Math.abs(z - roadZ(x)) < 8 || inPad(x, z, 6)) continue;
     PR.rock.push([x, y + 0.2, z, rand() * 6, 0.5 + rand() * rand() * 3.5, rand() * 3]);
   }
-  for (let i = 0; i < 600 && PR.hay.length < 40; i++) {
+  for (let i = 0; i < (ICEMAP ? 0 : 600) && PR.hay.length < 40; i++) {
     const x = (rand() - .5) * 900, z = (rand() - .5) * 700 - 60, y = H(x, z);
     if (y < 4 || Math.abs(H(x + 5, z) - y) > 0.8 || Math.abs(z - roadZ(x)) < 9 || inPad(x, z, 8) || boxes.some(b => Math.abs(b.x - x) < b.hx + 3 && Math.abs(b.z - z) < b.hz + 3)) continue;
     PR.hay.push([x, y + 1.0, z, rand() * 3, 1, Math.PI / 2]);
@@ -805,7 +980,7 @@ function buildWorld(seed) {
   instance(new THREE.SphereGeometry(0.3, 6, 4), new THREE.MeshBasicMaterial({ color: 0x9fd8ff }), PR.rl, false);
   instance(new THREE.CylinderGeometry(0.14, 0.2, 8, 5), mWood, PR.pole);
   instance(new THREE.BoxGeometry(2.6, 0.14, 0.14), mWood, PR.pole.map(e => [e[0], e[1] + 3.3, e[2], 0, 1]), false);
-  instance(new THREE.IcosahedronGeometry(1.5, 0), camFade(M(0x5a6e38, { roughness: 1 }), 3, 9), PR.bush, true, 0.75);
+  instance(new THREE.IcosahedronGeometry(1.5, 0), camFade(M(ICEMAP ? 0x55684f : 0x5a6e38, { roughness: 1 }), 3, 9), PR.bush, true, 0.75);
   instance(new THREE.DodecahedronGeometry(1, 0), M(0x7c7a72, { roughness: 1 }), PR.rock, true, 0.7);
   instance(new THREE.CylinderGeometry(1.1, 1.1, 1.5, 10), M(0xc9b060, { roughness: 1 }), PR.hay);
   const cl = instance(new THREE.IcosahedronGeometry(1, 1), new THREE.MeshLambertMaterial({ color: 0xd9dcde, emissive: 0x6a6e72, fog: true, transparent: true, opacity: .9, depthWrite: false }), PR.cloud, false, 0.32);
@@ -813,7 +988,7 @@ function buildWorld(seed) {
 
   compact(group, new Set([...world_radars, ...samSites.map(q => q.rad), ...samSites.map(q => q.turn), ...hangarsW.map(q => q.roof), ...decks]));
   scene.add(group);
-  world = { group, boxes, trees, samSites, seed, boxGrid: new Map(), hangars: hangarsW };
+  world = { group, boxes, trees, samSites, seed, map: MAP_ID, boxGrid: new Map(), hangars: hangarsW };
   for (const b of boxes) gridAddBox(b);
   world.treeState = plantTrees(group, trees, treeProc);
   world.towns = setupTowns(group, seed);
@@ -4498,10 +4673,19 @@ function buildMinimapBase() {
   for (let y = 0; y < MMH; y++) for (let x = 0; x < MMW; x++) {
     const wx = x / MMW * 2 * MMX - MMX, wz = y / MMH * 2 * MMZ - MMZ, hh = H(wx, wz), i = (y * MMW + x) * 4;
     if (hh < 0) { img.data[i] = 50; img.data[i + 1] = 92; img.data[i + 2] = 104; }
+    else if (MAP_ID === 'ice') {   // snow, darker with height, rock on the high ground
+      const e = 2 * MMX / MMW, sl = (H(wx + e, wz - e) - hh) / e;            // light from the north-west
+      const k = Math.min(1, hh / 520), r = hh > 3 ? Math.max(90, Math.min(250, 224 - k * 70 + sl * 40)) : 176;
+      img.data[i] = r; img.data[i + 1] = r + 3; img.data[i + 2] = r + 10;
+    }
     else { const k = Math.min(1, hh / 160); img.data[i] = 95 + k * 70; img.data[i + 1] = 108 + k * 50; img.data[i + 2] = 62 + k * 60; }
     img.data[i + 3] = 255;
   }
   c.putImageData(img, 0, 0);
+  if (MAP_ID === 'ice') {                                         // dirt tracks
+    c.strokeStyle = 'rgba(120,98,76,.85)'; c.lineWidth = 1.6;
+    for (const line of iceRoadSegs()) { c.beginPath(); line.forEach(([x, z], k) => { const [px, py] = mmP(x, z); k ? c.lineTo(px, py) : c.moveTo(px, py); }); c.stroke(); }
+  }
   if (world) {                                                    // buildings and towns
     c.fillStyle = 'rgba(58,56,50,.8)';
     for (const b of world.boxes) { const [x0, y0] = mmP(b.x - b.hx, b.z - b.hz), [x1, y1] = mmP(b.x + b.hx, b.z + b.hz); c.fillRect(x0, y0, Math.max(1, x1 - x0), Math.max(1, y1 - y0)); }
@@ -4600,7 +4784,8 @@ function resumeRoom() {
   if (p.vid) setTimeout(() => requestEnter(p.vid), 300);    // back into the same vehicle / seat
 }
 function startPlaying(fromStart) {
-  if (worldSeed !== room.seed) { buildWorld(room.seed); worldSeed = room.seed; }
+  const wk = room.seed + ':' + (room.map || 'valley');
+  if (worldSeed !== wk) { applyMap(room.map); buildWorld(room.seed); worldSeed = wk; }
   inGame = true;
   showScreen(null);
   $('ui').classList.add('on');
