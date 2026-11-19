@@ -1601,10 +1601,26 @@ function lodCheck(v) {
   for (const o of vis.hiParts) o.visible = !lo;
   for (const o of vis.loParts) o.visible = lo;
 }
-function addLod(v, g, hiParts, lo, col, k) {
+// movers: turning parts (turret, gun…) listed innermost first. The far model's triangles inside a mover's box
+// are cut out and put into that mover, so a far-away turret still turns where the player aims.
+function addLod(v, g, hiParts, lo, col, k, movers = []) {
   if (!lo) return;
   g.add(lo); v.mats = v.mats.concat(ownMats(lo, col, k));
-  v.hiParts = hiParts; v.loParts = [lo]; v.lo = false;
+  const loParts = [lo];
+  if (movers.length) {
+    // a mover keeps showing: hide its own detailed meshes instead of the whole pivot
+    const moverSet = new Set(movers);
+    const hiMeshes = []; for (const m of movers) m.traverse(o => { if (o.isMesh) hiMeshes.push(o); });
+    hiParts = hiParts.filter(o => !moverSet.has(o)).concat(hiMeshes);
+    g.updateMatrixWorld(true);
+    const boxes = movers.map(m => new THREE.Box3().setFromObject(m).expandByScalar(0.05));
+    const meshes = []; lo.traverse(o => { if (o.isMesh) meshes.push(o); });
+    for (const m of meshes) {
+      const sp = splitMesh(m, p => { const i = boxes.findIndex(b => b.containsPoint(p)); return i < 0 ? 'base' : 'm' + i; });
+      movers.forEach((mv, i) => { const part = sp['m' + i]; if (part) { mv.attach(part); part.visible = false; loParts.push(part); } });
+    }
+  }
+  v.hiParts = hiParts; v.loParts = loParts; v.lo = false;
 }
 // own copies of the materials (team tint, wreck darkening), lightly tinted towards the team colour
 function ownMats(root, color, k = 0.35) {
@@ -1906,7 +1922,7 @@ const DRESS = {
     for (const m of trackMeshes) { try { const r = trackRig(m); r.mat.userData.base = r.mat.userData.base || r.mat.color.clone(); v.mats.push(r.mat); trk.push(r); m.userData.keep = true; } catch (e) { console.warn('track rig', e); } }
     Object.assign(v, { turret, gun, tip, barrel: cannon, wheels, tracks: [], trk });
     mergeStatic(model);
-    if (MODELS.tank_lo) { const lo = MODELS.tank_lo.clone(true); lo.scale.setScalar(S); lo.position.copy(model.position); lo.visible = false; addLod(v, g, [model, turret, ...wheels], lo, col, 0.42); }
+    if (MODELS.tank_lo) { const lo = MODELS.tank_lo.clone(true); lo.scale.setScalar(S); lo.position.copy(model.position); lo.visible = false; addLod(v, g, [model, turret, ...wheels], lo, col, 0.42, [gun, turret]); }
   },
   plane(v, col) {
     const g = v.g;
@@ -1965,7 +1981,7 @@ const DRESS = {
     });
     v.funnelTop.position.set(0, 9.5, -2);
     mergeStatic(holder);
-    addLod(v, g, [holder, ...v.turrets.map(t => t.g)], lo, col, 0.22);
+    addLod(v, g, [holder, ...v.turrets.map(t => t.g)], lo, col, 0.22, [...v.turrets.map(t => t.gun), ...v.turrets.map(t => t.g)]);
   },
   jeep(v, col) {
     const g = v.g; hideProc(g);
@@ -1989,7 +2005,7 @@ const DRESS = {
     mergeStatic(holder); for (const w of v.wheels) mergeStatic(w); mergeStatic(v.gun);
     // front wheels steer: each sits in its own turning group
     v.steerers = v.wheels.filter(w => w.position.z > 0).map(w => { const sg = new THREE.Group(); sg.position.copy(w.position); g.add(sg); sg.add(w); w.position.set(0, 0, 0); return sg; });
-    addLod(v, g, [holder, v.turret, ...v.wheels], lo, col, 0.5);
+    addLod(v, g, [holder, v.turret, ...v.wheels], lo, col, 0.5, mg.length ? [v.gun, v.turret] : []);
   },
   // Li Auto L9 in army paint with the jeep's roof machine gun
   l9(v, col) {
