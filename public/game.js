@@ -295,6 +295,7 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.0;
 const scene = new THREE.Scene();
+scene.matrixAutoUpdate = false;           // the scene root never moves: no forced re-pass over every object each frame
 const SKY = new THREE.Color(0xa3aaae);          // overcast
 scene.background = SKY;
 scene.fog = new THREE.Fog(SKY, 520, 2700);
@@ -1876,6 +1877,7 @@ function dressVis(type, vis, color) {
   if (!MODELS[name]) return;
   atOrigin(vis.g, () => DRESS[key](vis, color));
   vis.model = true;
+  vis.g._sig = NaN;                       // new parts: place them on the next frame
 }
 const DRESS = {
   tank(v, col) {
@@ -2608,9 +2610,18 @@ function updateVis(v, dt) {
     v.vis.radar.rotation.y += dt * 2;
   }
   if (v.vis.loParts) lodCheck(v);
-  g.updateMatrixWorld(true);
-  v.inv.copy(g.matrixWorld).invert();
+  // matrices only when the machine (or a part of it) moved: most of the ~40 machines stand parked,
+  // and recomputing their thousands of model nodes every frame cost more than drawing them
+  if (!g._vehUMW) { g._vehUMW = true; g.updateMatrixWorld = vehMatrixWorld; }
+  const sig = v.pos.x + v.pos.y * 3.1 + v.pos.z * 7.3 + v.h * 11 + v.p * 13 + v.r * 17 + v.aimYaw * 19 + v.aimPitch * 23 + (v.wheelA || 0) * 29 + (v.steerV || 0) * 31 + (v.f2 || 0) * 37 + (v.walkA || 0) * 41 + (v.vis.lo ? 43 : 0) + (v.air ? 47 : 0) + (v.speed || 0) * 53;
+  if (sig !== g._sig || v.type === 'ship' || v.type === 'drone' || v.dead || --g._refresh <= 0) {
+    g._sig = sig; g._refresh = 50 + (v.n * 7) % 30;          // a full refresh now and then anyway
+    g.updateMatrixWorld(true);
+    v.inv.copy(g.matrixWorld).invert();
+  }
 }
+// a vehicle's group only recomputes when asked to (forced); the renderer's per-frame pass skips it
+function vehMatrixWorld(force) { if (force) THREE.Object3D.prototype.updateMatrixWorld.call(this, true); }
 function syncVehicles() {
   if (!room) return;
   for (const d of room.vehicles) {
@@ -3108,6 +3119,7 @@ addEventListener('mousemove', e => {
   if (!locked) return;
   const tv0 = myVehicle();
   if (tv0 && tv0.tmode) { const k = tv0.tzoom / innerHeight * 1.5; tv0.tgt.x = Math.max(-MAP_X, Math.min(MAP_X, tv0.tgt.x + e.movementX * k)); tv0.tgt.z = Math.max(-MAP_Z, Math.min(MAP_Z + 300, tv0.tgt.z + e.movementY * k)); return; }
+  if (Math.abs(e.movementX) > 400 || Math.abs(e.movementY) > 400) return;   // Chrome sometimes reports a bogus jump right after locking
   const s = sniper ? 0.00055 : zoom ? 0.0006 : 0.0021;
   camYaw -= e.movementX * s;
   camPitch = Math.max(sniper ? -0.45 : -1.2, Math.min(sniper ? 0.4 : 1.2, camPitch - e.movementY * s));
@@ -4659,9 +4671,24 @@ function updateBaseAlarm(now) {
   audio.siren(baseAlarm);
 }
 let last = performance.now(), menuAngle = 0, listT = 0;
+// keep the frame rate up: if frames get slow, draw fewer pixels (and go back up when there is room)
+const RES_STEPS = [1.5, 1.25, 1, 0.85].filter(r => r <= Math.max(1, Math.min(devicePixelRatio, 1.5)) + 1e-6);
+let resI = 0, resAcc = 0, resN = 0, resHold = 0;
+function adaptRes(dt) {
+  if (document.hidden || dt <= 0) return;
+  resAcc += dt; resN++; resHold -= dt;
+  if (resAcc < 2) return;
+  const avg = resAcc / resN; resAcc = 0; resN = 0;
+  if (avg > 0.021 && resI < RES_STEPS.length - 1) resI++;                    // under ~48 fps: one step down
+  else if (avg < 0.0125 && resI > 0 && resHold <= 0) resI--;                // over 80 fps: one step back up
+  else return;
+  resHold = 20;
+  renderer.setPixelRatio(RES_STEPS[resI]); renderer.setSize(innerWidth, innerHeight, false);
+}
 function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (inGame) adaptRes(dt);
   waterUniforms.uTime.value = now / 1000;
   updateBaseAlarm(now);
   if (inGame && world) {
