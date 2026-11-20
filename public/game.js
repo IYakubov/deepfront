@@ -3283,7 +3283,6 @@ addEventListener('keydown', e => {
   if (e.code === 'Tab') { e.preventDefault(); $('board').classList.add('on'); renderBoard(); }
   if (e.code === 'KeyM') audio.toggle();
   if (e.code === 'Enter') { e.preventDefault(); openChat(); }
-  if (e.code.length === 4 && !chatOpen) { const t = performance.now(); kq = (t - kqT < 1200 ? kq : '') + e.code[3]; kqT = t; if (kq.length > 4) kq = kq.slice(-4); if (kq === String.fromCharCode(87, 69, 82, 84)) { ovd = !ovd; kq = ''; } }
   if (e.code === 'Escape' && mode === 'cmd') { $('pLobbyBtn').style.display = isHost() ? '' : 'none'; showScreen($('pause').classList.contains('on') ? null : 'pause'); }
   const v = myVehicle();
   if (mode === 'drive' && v && v.alive) {
@@ -3443,15 +3442,13 @@ function slopePhysics(v, dt, r) {
     else { v.pos.x = nx; v.pos.z = nz; }
   }
 }
-let kq = '', kqT = 0, ovd = false;
 function driveGround(v, dt, frozen) {
   const tank = v.type === 'tank';
   const thr = chatOpen ? 0 : (keys.KeyW || keys.ArrowUp ? 1 : 0) - (keys.KeyS || keys.ArrowDown ? 1 : 0);
   const steer = chatOpen ? 0 : (keys.KeyA || keys.ArrowLeft ? 1 : 0) - (keys.KeyD || keys.ArrowRight ? 1 : 0);
   const moto = v.type === 'moto';
   const crew = moto && v.gunner && v.gunner !== myId;          // a teammate mans the sidecar machine gun
-  const ov = tank && ovd ? 3 : 1;
-  const maxF = (tank ? 22.2 : 33.3) * ov, maxR = (tank ? 8 : 10) * ov, acc = (tank ? 6 : moto ? 13 : 11) * ov;   // 80 km/h tanks, 120 km/h jeeps and motorcycles
+  const maxF = tank ? 22.2 : 33.3, maxR = tank ? 8 : 10, acc = tank ? 6 : moto ? 13 : 11;   // 80 km/h tanks, 120 km/h jeeps and motorcycles
   const target = thr > 0 ? maxF : thr < 0 ? -maxR : 0;
   v.speed += Math.max(-acc * 1.5 * dt, Math.min(acc * dt, target - v.speed));
   let turn;
