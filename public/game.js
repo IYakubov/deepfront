@@ -3421,6 +3421,27 @@ function blocked(x, z, r, self) {
   }
   return Math.abs(x) > MAP_X - 60 || z < -MAP_Z + 60 || z > MAP_Z;
 }
+// gravity on slopes for ground machines: going uphill costs speed, downhill adds it; on a slope steeper
+// than ~35° the tracks/tyres lose grip and the machine slides back down
+const SLIDE_SLOPE = 0.7, GRIP = 0.5;
+function slopePhysics(v, dt, r) {
+  const x = v.pos.x, z = v.pos.z, e = 2.5;
+  const gx = (H(x + e, z) - H(x - e, z)) / (2 * e), gz = (H(x, z + e) - H(x, z - e)) / (2 * e), s = Math.hypot(gx, gz);
+  const along = gx * Math.sin(v.h) + gz * Math.cos(v.h);                 // rise per metre straight ahead
+  v.speed -= 9.8 * along / Math.sqrt(1 + along * along) * 0.7 * dt;
+  const sl = v.slide || (v.slide = { x: 0, z: 0 });
+  if (s > SLIDE_SLOPE) {
+    const c = 1 / Math.sqrt(1 + s * s), a = 9.8 * (s * c - GRIP * c) + 2;
+    sl.x -= gx / s * a * dt; sl.z -= gz / s * a * dt;
+    if (along > 0.2) v.speed *= Math.exp(-3 * dt);                          // wheels spinning on the steep part
+    if (v === myVehicle()) warnText = 'СЛИШКОМ КРУТО — СКОЛЬЗИТ';
+  } else { const k = Math.exp(-5 * dt); sl.x *= k; sl.z *= k; }
+  if (Math.abs(sl.x) + Math.abs(sl.z) > 0.05) {
+    const nx = x + sl.x * dt, nz = z + sl.z * dt;
+    if (H(nx, nz) < -1.4 || blocked(nx, nz, r, v)) { sl.x = 0; sl.z = 0; }
+    else { v.pos.x = nx; v.pos.z = nz; }
+  }
+}
 function driveGround(v, dt, frozen) {
   const tank = v.type === 'tank';
   const thr = chatOpen ? 0 : (keys.KeyW || keys.ArrowUp ? 1 : 0) - (keys.KeyS || keys.ArrowDown ? 1 : 0);
@@ -3447,10 +3468,10 @@ function driveGround(v, dt, frozen) {
   if (H(nx, nz) < -1.4) { v.speed = 0; warnText = 'ВОДА — ДАЛЬШЕ НЕ ПРОЕХАТЬ'; v.h = nh; }
   else if (blocked(nx, nz, r, v)) { v.speed *= -0.2; v.h = nh; }
   else { v.pos.x = nx; v.pos.z = nz; v.h = nh; }
+  slopePhysics(v, dt, r);
   const gf = groundFollow(v, v.pos.x, v.pos.z, tank ? 3.3 : moto ? 0.9 : 1.45, tank ? 1.45 : moto ? 0.7 : 1.1);
   v.p += (gf.p - v.p) * Math.min(1, dt * 8); v.r += (gf.r - v.r) * Math.min(1, dt * 8);
   v.pos.y = restY(gf, v.p, v.r);              // with the tilt actually shown, so the wheels never dip into the ground
-  if (Math.abs(gf.p) > 0.6) v.speed *= Math.exp(-3 * dt);
   // turret: turn towards the aim point; gun elevates to land the shell there
   if (crew) { audio.engine('moto', Math.abs(thr), Math.abs(v.speed) / maxF); return; }
   const tp = _v3.set(v.pos.x, v.pos.y + (tank ? 2.4 : moto ? 1.3 : 2.3), v.pos.z);
@@ -4158,6 +4179,7 @@ function autoPhysics(v, dt, thr, steer) {
   if (H(nx, nz) < -1.4) { v.speed = 0; v.h = nh; }
   else if (blocked(nx, nz, 1.4, v)) { v.speed *= -0.2; v.h = nh; }
   else { v.pos.x = nx; v.pos.z = nz; v.h = nh; }
+  slopePhysics(v, dt, 1.4);
   const gf = groundFollow(v, v.pos.x, v.pos.z, 1.45, 1.1);
   v.p += (gf.p - v.p) * Math.min(1, dt * 8); v.r += (gf.r - v.r) * Math.min(1, dt * 8);
   v.pos.y = restY(gf, v.p, v.r);
