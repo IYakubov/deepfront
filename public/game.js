@@ -3860,7 +3860,7 @@ function driveShip(v, dt, frozen) {
     let ok = true;
     for (const off of [22, 0, -22]) if (H(nx + Math.sin(nh) * off, nz + Math.cos(nh) * off) > -3.5) ok = false;
     for (const o of vehicles.values()) if (o !== v && o.type === 'ship' && o.vis.g.visible && Math.hypot(nx - o.pos.x, nz - o.pos.z) < 26) ok = false;
-    if (Math.abs(nx) > MAP_X || nz > MAP_Z) ok = false;
+    if (MAP_ID === 'ice' ? Math.abs(nx) > MAP_X + 380 || Math.abs(nz) > MAP_Z + 380 : Math.abs(nx) > MAP_X || nz > MAP_Z) ok = false;   // the island has open sea all around
     for (const b of boxesIn(nx - 5, nz - 5, nx + 5, nz + 5)) if (b.y0 < 0 && Math.abs(nx - b.x) < b.hx + 5 && Math.abs(nz - b.z) < b.hz + 5) ok = false;
     if (ok) { v.pos.x = nx; v.pos.z = nz; v.h = nh; }
     else { v.speed *= Math.exp(-4 * dt); v.h = nh; warnText = 'МЕЛЬ / ПРЕПЯТСТВИЕ'; }
