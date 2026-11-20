@@ -3175,19 +3175,32 @@ function clearShots() { for (const s of shots) scene.remove(s.mesh); shots.lengt
 // each client runs the enemy SAM sites against its own plane only
 const SAM_RANGE = 1500, SAM_LOCK = 2, SAM_CD = 6, SAM_HOME = 6, SAM_SPEED = 300, SAM_TURN = 1.6;
 const sams = [];      // SAM missiles in flight
-let samLock = 0, samSeq = 0, flares = 3, flareCd = 0;
+let samLock = 0, samSeq = 0, flares = 3, flareCd = 0, samHidden = false;
+// Ледяной остров: a plane flying lower than the mountains around it is lost in the ground clutter —
+// the radars on the peaks can't pick it out, and missiles already in the air lose it too
+function terrainMasked(v) {
+  if (MAP_ID !== 'ice' || !v) return false;
+  let top = H(v.pos.x, v.pos.z);
+  for (let k = 0; k < 12; k++) {
+    const a = k / 12 * TAU, c = Math.cos(a), s = Math.sin(a);
+    top = Math.max(top, H(v.pos.x + c * 130, v.pos.z + s * 130), H(v.pos.x + c * 280, v.pos.z + s * 280));
+  }
+  return v.pos.y < top - 10;
+}
 const samGeo = new THREE.CylinderGeometry(0.25, 0.25, 3.2, 6); samGeo.rotateX(Math.PI / 2);
 function updateSamSites(dt, now) {
   if (!world) return;
   const me_ = myVehicle();
   const target = me_ && me_.type === 'plane' && me_.air && me_.alive ? me_ : null;
   let lvl = 0;
+  const masked = target && terrainMasked(target);
+  samHidden = !!masked && world.samSites.some(s => s.team !== target.team && s.top.distanceTo(target.pos) < SAM_RANGE);
   for (const s of world.samSites) {
     s.spin += dt * (s.lockT > 0 ? 4 : 1);
     s.rad.rotation.y = s.spin;
     s.cd -= dt;
     let sees = false;
-    if (target && s.team !== target.team && now > matchStartAt) {
+    if (target && !masked && s.team !== target.team && now > matchStartAt) {
       const d = s.top.distanceTo(target.pos);
       if (d < SAM_RANGE) {
         _o3[0] = s.top.x; _o3[1] = s.top.y + 3; _o3[2] = s.top.z;
@@ -3230,7 +3243,8 @@ function updateSams(dt) {
     m.age += dt;
     const tv = vehicles.get(m.target);
     let want = null;
-    if (m.age > 0.6 && m.age < SAM_HOME) {
+    if (m.mine && tv && !m.lost && m.age > 0.6 && terrainMasked(tv)) m.lost = true;      // dived under the ridges: lost
+    if (m.age > 0.6 && m.age < SAM_HOME && !m.lost) {
       if (m.decoy) want = _v1.copy(m.decoy.pos).sub(m.pos).normalize();
       else if (tv && tv.alive) want = _v1.copy(tv.pos).sub(m.pos).normalize();
     }
@@ -4529,7 +4543,7 @@ let warnBeepT = 0, alarmT = 0;
 function drawThreats(c, w, h, dt) {
   const el = $('mwarn'), v = myVehicle();
   warnBeepT -= dt;
-  const incoming = sams.filter(m => m.target === myVid && !m.decoy && m.age < SAM_HOME);
+  const incoming = sams.filter(m => m.target === myVid && !m.decoy && !m.lost && m.age < SAM_HOME);
   const rk = shots.find(s => s.tv === myVid && !s.mine);
   alarmT -= dt;
   const nuke = shots.find(s => s.k === 'icbm' && v && Math.hypot(s.target.x - v.pos.x, s.target.z - v.pos.z) < ICBM_R + 30);
@@ -4545,7 +4559,10 @@ function drawThreats(c, w, h, dt) {
   } else if (samLock) {
     el.style.display = 'block'; el.className = 'lock'; el.textContent = samLock === 2 ? 'ПВО: ЗАХВАТ!' : 'ПВО: РАДАР';
     if (warnBeepT <= 0) { audio.tone(samLock === 2 ? 900 : 560, 0.07, 0.04); warnBeepT = samLock === 2 ? 0.2 : 0.6; }
+  } else if (samHidden && v.type === 'plane') {
+    el.style.display = 'block'; el.className = 'lock'; el.style.opacity = '.75'; el.textContent = 'НИЖЕ ГОР — ПВО НЕ ВИДИТ';
   } else el.style.display = 'none';
+  if (!(samHidden && v.type === 'plane') || samLock || incoming.length || rk) el.style.opacity = '';
 }
 // commander view overlay: icons over every vehicle of my team, spotted enemies in red
 function drawCmdHud(c, w, h, now) {
