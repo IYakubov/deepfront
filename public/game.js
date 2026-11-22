@@ -2597,23 +2597,29 @@ DRESS.harley = function (v, col) {
     v.mats = v.mats.concat(ownMats(s, col, 0.1));
     // biker look: dark leathers
     s.traverse(o => { if (o.isMesh && o.material.userData.base) { o.material.userData.base.multiplyScalar(0.32); o.material.color.copy(o.material.userData.base); o.material.roughness = 0.55; } });
-    // a full-face helmet with a dark visor, on the head bone
+    // his own head: an original bald, bearded biker with a team-coloured bandana (the army helmet shrinks away)
     if (head) {
       const hm = new THREE.Group();
-      const M = (c, r, m) => new THREE.MeshStandardMaterial({ color: c, roughness: r, metalness: m });
-      const shellM = M(0x17181a, 0.3, 0.35), visM = M(0x0a0b0d, 0.06, 0.85), stripeM = M(col, 0.35, 0.3);
-      const shell = new THREE.Mesh(new THREE.SphereGeometry(0.135, 20, 14), shellM); shell.scale.set(0.94, 0.98, 1.12);
-      // chin guard and the lower back edge: a full-face helmet, not a ball
-      const chin = new THREE.Mesh(new THREE.SphereGeometry(0.11, 16, 10, Math.PI / 2 - 1.1, 2.2, 1.5, 1.0), shellM); chin.scale.set(1, 0.95, 1.05); chin.position.set(0, -0.045, 0.035);
-      const visor = new THREE.Mesh(new THREE.SphereGeometry(0.139, 18, 8, Math.PI / 2 - 0.95, 1.9, 1.2, 0.5), visM); visor.scale.copy(shell.scale);
-      const stripe = new THREE.Mesh(new THREE.TorusGeometry(0.137, 0.012, 6, 28, Math.PI * 1.15), stripeM); stripe.rotation.set(0, Math.PI / 2, Math.PI * -0.075); stripe.scale.set(0.98, 1, 1.12);
-      const peak = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.012, 0.05), shellM); peak.position.set(0, 0.085, 0.13); peak.rotation.x = -0.25;
-      hm.add(shell, chin, visor, stripe, peak);
-      stripeM.userData = { real: true, base: stripeM.color.clone() }; v.mats.push(stripeM);
+      const M = (c, r) => new THREE.MeshStandardMaterial({ color: c, roughness: r });
+      const skin = M(0xb8896a, 0.7), hair = M(0x2a1f17, 0.95), dark = M(0x111111, 0.4), band = M(col, 0.8);
+      const add = (geo, m, x, y, z, sx = 1, sy = 1, sz = 1) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); o.scale.set(sx, sy, sz); o.castShadow = true; hm.add(o); return o; };
+      add(new THREE.SphereGeometry(0.1, 20, 16), skin, 0, 0, 0, 0.9, 1.1, 1.0);                                   // skull
+      add(new THREE.SphereGeometry(0.085, 16, 10), skin, 0, -0.06, 0.02, 0.92, 0.8, 1.0);                          // jaw
+      add(new THREE.SphereGeometry(0.09, 16, 10, Math.PI / 2 - 1.3, 2.6, 1.6, 1.4), hair, 0, -0.045, 0.02, 0.98, 1.05, 1.07);   // beard
+      add(new THREE.BoxGeometry(0.06, 0.012, 0.015), hair, 0, -0.035, 0.093);                                     // moustache
+      add(new THREE.ConeGeometry(0.014, 0.04, 8), skin, 0, -0.005, 0.1).rotation.x = Math.PI / 2 - 0.3;           // nose
+      for (const sx of [-1, 1]) {
+        add(new THREE.SphereGeometry(0.009, 8, 6), dark, sx * 0.03, 0.022, 0.088);                               // eyes
+        add(new THREE.BoxGeometry(0.035, 0.008, 0.012), hair, sx * 0.03, 0.04, 0.09).rotation.z = -sx * 0.15;     // brows
+        add(new THREE.SphereGeometry(0.022, 8, 6), skin, sx * 0.092, 0.0, -0.005, 0.45, 1, 0.75);                 // ears
+      }
+      add(new THREE.SphereGeometry(0.103, 20, 10, 0, TAU, 0, 1.25), band, 0, 0.012, -0.004, 0.92, 1.1, 1.02);      // bandana
+      add(new THREE.SphereGeometry(0.02, 8, 6), band, 0, 0.03, -0.1, 1.2, 0.8, 0.8);                               // its knot
+      band.userData = { real: true, base: band.color.clone() }; v.mats.push(band);
       s.updateMatrixWorld(true);
-      const hw = head.getWorldPosition(new THREE.Vector3()); hm.scale.setScalar(1.08);
-      lean.add(hm); hm.position.copy(lean.worldToLocal(hw.add(V(0, 0.09, 0.02))));
-      head.scale.setScalar(0.72);                           // his own head (and army helmet) shrinks inside the new one
+      const hw = head.getWorldPosition(new THREE.Vector3()); hm.scale.setScalar(1.12);
+      lean.add(hm); hm.position.copy(lean.worldToLocal(hw.add(V(0, 0.08, 0.025))));
+      head.scale.setScalar(0.01);                           // the soldier's own head and army helmet are not drawn
       lean.updateMatrixWorld(true); (head.parent || head).attach(hm);
     }
   }
