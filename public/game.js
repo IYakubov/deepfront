@@ -5380,13 +5380,27 @@ function leaveGame() {
 // ═══════════ MAIN LOOP ═══════════
 // ── base alarm: an enemy machine on my side of the map, from the town nearest to my base inwards ──
 let baseAlarm = false;
+const inMyBase = new Set();
 function updateBaseAlarm(now) {
   let n = 0;
   if (inGame && world && room && room.state === 'playing' && now >= matchStartAt) {
-    const t = myTeam();
-    for (const o of vehicles.values()) if (o.team !== t && o.alive && !o.dead && (t ? o.pos.x : -o.pos.x) > ASSAULT_X) n++;
+    const t = myTeam(), B = BASES[t];
+    for (const o of vehicles.values()) {
+      if (o.team === t || !o.alive || o.dead) { inMyBase.delete(o.vid); continue; }
+      if ((t ? o.pos.x : -o.pos.x) > ASSAULT_X) n++;
+      // inside the base itself — driven by a player, or sent there by a commander's order / the L9 autopilot
+      const inside = Math.hypot(o.pos.x - B.x, o.pos.z - B.z) < BASE_R + (inMyBase.has(o.vid) ? 60 : 30);
+      if (inside && !inMyBase.has(o.vid)) {
+        inMyBase.add(o.vid);
+        const how = !o.driver && o.auto ? ' · без водителя, по команде' : '';
+        centerMsg('ВАШУ БАЗУ ЗАХВАТЫВАЮТ!', vName(o) + ' противника въехал на вашу базу' + how, 5000, '#ff5a46');
+        logMsg('<b style="color:#ff7a68">' + vName(o) + '</b> противника на вашей базе' + how);
+        audio.tone(980, 0.25, 0.08);
+      } else if (!inside) inMyBase.delete(o.vid);
+    }
   }
-  if (n && !baseAlarm) centerMsg('ВАШУ БАЗУ ЗАХВАТЫВАЮТ!', 'противник на вашей территории', 5000, '#ff5a46');
+  if (n) n += inMyBase.size;
+  if (n && !baseAlarm && !inMyBase.size) centerMsg('ВАШУ БАЗУ ЗАХВАТЫВАЮТ!', 'противник на вашей территории', 5000, '#ff5a46');
   baseAlarm = n > 0;
   audio.siren(baseAlarm);
 }
