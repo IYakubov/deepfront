@@ -5392,9 +5392,8 @@ function updateBaseAlarm(now) {
       const inside = Math.hypot(o.pos.x - B.x, o.pos.z - B.z) < BASE_R + (inMyBase.has(o.vid) ? 60 : 30);
       if (inside && !inMyBase.has(o.vid)) {
         inMyBase.add(o.vid);
-        const how = !o.driver && o.auto ? ' · без водителя, по команде' : '';
-        centerMsg('ВАШУ БАЗУ ЗАХВАТЫВАЮТ!', vName(o) + ' противника въехал на вашу базу' + how, 5000, '#ff5a46');
-        logMsg('<b style="color:#ff7a68">' + vName(o) + '</b> противника на вашей базе' + how);
+        centerMsg('ВАШУ БАЗУ ЗАХВАТЫВАЮТ!', vName(o) + ' противника въехал на вашу базу', 5000, '#ff5a46');
+        logMsg('<b style="color:#ff7a68">' + vName(o) + '</b> противника на вашей базе');
         audio.tone(980, 0.25, 0.08);
       } else if (!inside) inMyBase.delete(o.vid);
     }
