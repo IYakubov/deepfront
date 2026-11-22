@@ -45,7 +45,7 @@ const LAYOUT = [
   ['gunner', -985, 40, Math.PI / 2], ['gunner', -1010, 215, Math.PI / 2], ['gunner', -1150, 405, 0],
 ];
 
-const MAPS = ['valley', 'ice'];       // Долина, Ледяной остров
+const MAPS = ['valley', 'ice', 'storm'];       // Долина, Ледяной остров, Ночной шторм (no ships)
 const rooms = new Map();
 
 function newCode() {
@@ -69,9 +69,10 @@ function makeVehicles(map) {
   for (const team of [0, 1]) {
     const count = {};
     for (const [type, x, z, yaw, skin] of LAYOUT) {
+      if (map === 'storm' && type === 'ship') continue;
       const ck = skin || type;
       count[ck] = (count[ck] || 0) + 1;
-      const sp = team === 0 ? { x, z, yaw } : { x: -x, z: map === 'ice' ? iceBlueSpot(type, x, z) : z, yaw: -yaw };
+      const sp = team === 0 ? { x, z, yaw } : { x: -x, z: map === 'ice' || map === 'storm' ? iceBlueSpot(type, x, z) : z, yaw: -yaw };
       vs.push({ vid: `${team}${skin ? 'l' : PFX[type] || type[0]}${count[ck]}`, team, type, skin: skin || null, n: count[ck], hp: HP[type], max: HP[type], alive: true, driver: null, ammo: type === 'icbm' ? 2 : 0, spent: false, spawn: sp, st: null, respawnAt: 0, lastHitBy: null, lastHitAt: 0 });
     }
   }
@@ -298,7 +299,7 @@ io.on('connection', socket => {
     if (!v || v.type !== 'plane' || !v.alive || v.driver !== socket.id || room.state !== 'playing' || !v.st) return;
     const bx = v.team ? 1200 : -1200;
     const x = v.st[0], z = v.st[2];
-    const rz = room.map === 'ice' && v.team ? 370 : -250;
+    const rz = (room.map === 'ice' || room.map === 'storm') && v.team ? 370 : -250;
     const home = Math.hypot(x - bx, z - 60) < 290 || (Math.abs(x) > 990 && Math.sign(x) === (v.team ? 1 : -1) && Math.abs(z - rz) < 90);   // base or its runway
     if (!home || Math.abs(v.st[6] || 0) > 2) return;
     if (now - (v.fixAt || 0) < 850) return;

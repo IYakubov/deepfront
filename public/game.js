@@ -19,7 +19,7 @@ const BASE_R = 270;
 const RWY = { x0: 1030, x1: 1480, z: -250, w: 30 };   // |x| range, mirrored per team
 // airfield z for a team: on Ледяной остров the blue airfield is turned to the south side of its base,
 // so the canyons don't lead straight onto both runways (MAP_ID is set before anything is built)
-const afZ = (team, z) => (MAP_ID === 'ice' && team === 1 ? 120 - z : z);
+const afZ = (team, z) => ((MAP_ID === 'ice' || MAP_ID === 'storm') && team === 1 ? 120 - z : z);
 const rwyZ = team => afZ(team, RWY.z);
 const sideTeam = x => (x < 0 ? 0 : 1);
 const PORT = [{ x: -1200, z: 520 }, { x: 1200, z: 520 }];
@@ -144,7 +144,7 @@ function renderLobby() {
   }
   // map choice (the host picks)
   const cur = room.map || 'valley';
-  $('maps').innerHTML = MAP_LIST.map(m => `<button data-map="${m.id}" class="${m.id === cur ? 'on' : ''}" ${isHost() ? '' : 'disabled'}><img src="maps/${m.id}.jpg?v=${ASSET_V}c" alt=""><b>${m.name}</b><span>${m.desc}</span></button>`).join('');
+  $('maps').innerHTML = MAP_LIST.map(m => `<button data-map="${m.id}" class="${m.id === cur ? 'on' : ''}" ${isHost() ? '' : 'disabled'}><img src="maps/${m.id}.jpg?v=${ASSET_V}d" alt=""><b>${m.name}</b><span>${m.desc}</span></button>`).join('');
   $('maps').querySelectorAll('button').forEach(b => b.onclick = () => { if (isHost() && b.dataset.map !== cur) socket.emit('setMap', b.dataset.map); });
   $('startBtn').disabled = !isHost();
   $('startBtn').textContent = isHost() ? (room.players.length < 2 ? 'Начать (тренировка)' : 'Начать бой') : 'Ожидание хоста…';
@@ -287,8 +287,31 @@ const audio = (() => {
     node.connect(master); o.start(t); o.stop(t + 1.7);
     play('hit', 1.1 * k, pan * 0.6, 0.55);
   }
+  // night storm: rolling thunder, and the rain loop
+  function thunder(dist = 0.5) {
+    if (!ctx || muted || !noiseBuf) return;
+    const t = ctx.currentTime, k = 1.1 - dist * 0.7;
+    const s = ctx.createBufferSource(); s.buffer = noiseBuf; s.loop = true;
+    const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.setValueAtTime(900 - dist * 500, t); f.frequency.exponentialRampToValueAtTime(120, t + 3.5);
+    const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.9 * k, t + 0.05 + dist * 0.3);
+    g.gain.exponentialRampToValueAtTime(0.35 * k, t + 1.2); g.gain.exponentialRampToValueAtTime(0.0001, t + 4.2);
+    s.connect(f); f.connect(g); g.connect(master); s.start(t); s.stop(t + 4.3);
+    play('explosion', 0.5 * k, 0, 0.45);
+  }
+  let rainNode = null;
+  function rain(on) {
+    if (!ctx || !noiseBuf) return;
+    on = on && !muted;
+    if (on && !rainNode) {
+      const s = ctx.createBufferSource(); s.buffer = noiseBuf; s.loop = true;
+      const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 2400; f.Q.value = 0.5;
+      const g = ctx.createGain(); g.gain.value = 0.07;
+      s.connect(f); f.connect(g); g.connect(master); s.start();
+      rainNode = { s, g };
+    } else if (!on && rainNode) { rainNode.s.stop(); rainNode = null; }
+  }
   const musicState = () => ({ src: music.src.split('/').pop(), paused: music.paused, t: +music.currentTime.toFixed(1), vol: music.volume, err: music.error && music.error.code, ready: music.readyState, muted, unlocked });
-  return { unlock, play, at, engine, engineOff, setMusicVol, toggle, tone, whoosh, boom, siren, musicState };
+  return { unlock, play, at, engine, engineOff, setMusicVol, toggle, tone, whoosh, boom, siren, musicState, thunder, rain };
 })();
 $('mute').onclick = () => { audio.unlock(); audio.toggle(); };
 const _a1 = new THREE.Vector3(), _a2 = new THREE.Vector3();
@@ -305,7 +328,7 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.0;
 const scene = new THREE.Scene();
 scene.matrixAutoUpdate = false;           // the scene root never moves: no forced re-pass over every object each frame
-const SKY = new THREE.Color(0xa3aaae);          // overcast
+const SKY = new THREE.Color(0xa3aaae), skyTop = new THREE.Color(0x868f97);          // overcast
 scene.background = SKY;
 scene.fog = new THREE.Fog(SKY, 520, 2700);
 const camera = new THREE.PerspectiveCamera(62, 1, 0.3, 7000);
@@ -331,7 +354,7 @@ const SUN_DIR = new THREE.Vector3(0.45, 0.8, 0.35).normalize();
   const g = new THREE.SphereGeometry(5000, 24, 12);
   const m = new THREE.ShaderMaterial({
     side: THREE.BackSide, depthWrite: false, fog: false,
-    uniforms: { top: { value: new THREE.Color(0x868f97) }, bot: { value: SKY } },
+    uniforms: { top: { value: skyTop }, bot: { value: SKY } },
     vertexShader: 'varying vec3 vp; void main(){ vp=position; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.); }',
     fragmentShader: 'uniform vec3 top; uniform vec3 bot; varying vec3 vp; void main(){ float h=clamp(normalize(vp).y*2.0,0.,1.); gl_FragColor=vec4(mix(bot,top,h),1.); }'
   });
@@ -493,7 +516,9 @@ function camFade(mat, near, far) {
 const MAP_LIST = [
   { id: 'valley', name: 'Долина', desc: 'Холмы, городки и море на юге' },
   { id: 'ice', name: 'Ледяной остров', desc: 'Зима, горы в центре, ущелья для полётов под ПВО' },
+  { id: 'storm', name: 'Ночной шторм', desc: 'Ночь, ливень и молнии; горный лабиринт; без кораблей' },
 ];
+const ISLE = () => MAP_ID === 'ice' || MAP_ID === 'storm';      // the island maps (same outline and bases)
 let MAP_ID = 'valley';
 const mapName = id => (MAP_LIST.find(m => m.id === id) || MAP_LIST[0]).name;
 
@@ -513,10 +538,39 @@ const ICE = {
   towns: [ { id: 'country', x: 0, z: 930, hx: 26, hz: 26 }, { id: 'vil0', x: -600, z: -850, hx: 88, hz: 90 }, { id: 'vil1', x: 600, z: -850, hx: 88, hz: 90 } ],
   sams: [[-560, -440], [-560, 40], [-520, 510]],     // team 0 targets; the site goes on the highest point nearby
   coastZ: x => { const g = ICE.coast; if (!g) return 600; const i = Math.max(0, Math.min(g.length - 1, Math.round((x + MAP_X + 500) / 10))); return g[i]; },
-  grid: null,
+  grid: null, grids: {}, coasts: {},
 };
+// Ночной шторм: the massif is a maze — a grid of cells joined by narrow gorges (a random perfect maze with
+// a few extra openings, so there are dead ends and more than one way), two ways in from each base
+function stormMaze() {
+  if (ICE.maze) return ICE.maze;
+  const rnd = mulberry32(777), NX = 7, NZ = 6, X0 = -790, Z0 = -640, CX = 1580 / NX, CZ = 1300 / NZ;
+  const ctr = [];
+  for (let k = 0; k < NZ; k++) for (let i = 0; i < NX; i++) ctr.push([X0 + CX * (i + .5) + (rnd() - .5) * 50, Z0 + CZ * (k + .5) + (rnd() - .5) * 50]);
+  const id = (i, k) => k * NX + i, seen = new Uint8Array(NX * NZ), links = [];
+  const stack = [[3, 2]]; seen[id(3, 2)] = 1;
+  while (stack.length) {
+    const [i, k] = stack[stack.length - 1];
+    const nb = [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([a, b]) => [i + a, k + b]).filter(([a, b]) => a >= 0 && b >= 0 && a < NX && b < NZ && !seen[id(a, b)]);
+    if (!nb.length) { stack.pop(); continue; }
+    const [a, b] = nb[Math.floor(rnd() * nb.length)];
+    seen[id(a, b)] = 1; links.push([id(i, k), id(a, b)]); stack.push([a, b]);
+  }
+  // a few walls knocked through: loops, so it isn't one single path
+  for (let n = 0; n < 7; n++) {
+    const i = Math.floor(rnd() * (NX - 1)), k = Math.floor(rnd() * NZ), h = rnd() < .5;
+    const a = id(i, k), b = h ? id(i + 1, k) : id(i, Math.min(NZ - 1, k + 1));
+    if (a !== b && !links.some(([p, q]) => (p === a && q === b) || (p === b && q === a))) links.push([a, b]);
+  }
+  const out = links.map(([a, b]) => [ctr[a], ctr[b]]);
+  // the ways in: two from each base side, one from the north coast, one from the south coast
+  for (const k of [2, 4]) { const w = ctr[id(0, k)], e = ctr[id(NX - 1, k - 1)]; out.push([[-1060, w[1]], w]); out.push([[1060, e[1]], e]); }
+  out.push([[-150, -1100], ctr[id(2, 0)]]); out.push([[150, 1150], ctr[id(4, NZ - 1)]]);
+  return (ICE.maze = out);
+}
 // "a snake that caught a cold": tight, uneven zig-zags, so there is no straight line through
 function iceCanyons() {
+  if (MAP_ID === 'storm') return stormMaze();
   if (ICE.canyons) return ICE.canyons;
   // long bends (a plane can just make them: turn radius ~100 m) — no straight line of sight end to end
   const rnd = mulberry32(4242), zig = (z0, amp0) => {
@@ -551,7 +605,8 @@ function segDist(x, z, pts) {
 // the height of the island, computed once into a 6 m grid (H samples it)
 const ICE_CELL = 8, ICE_X0 = -MAP_X - 500, ICE_Z0 = -MAP_Z - 500, ICE_NX = Math.ceil((MAP_X * 2 + 1000) / ICE_CELL) + 1, ICE_NZ = Math.ceil((MAP_Z * 2 + 1000) / ICE_CELL) + 1;
 function iceGrid() {
-  if (ICE.grid) return ICE.grid;
+  const key = MAP_ID;
+  if (ICE.grids[key]) { ICE.grid = ICE.grids[key]; ICE.coast = ICE.coasts[key]; return ICE.grid; }
   const n1 = makeNoise(mulberry32(911)), n2 = makeNoise(mulberry32(912)), n3 = makeNoise(mulberry32(913));
   const fbm = (n, x, z, o) => { let s = 0, a = 1, t = 0; for (let i = 0; i < o; i++) { s += n(x, z) * a; t += a; a *= .5; x *= 2.03; z *= 2.03; } return s / t; };
   const ridged = (x, z) => { let s = 0, a = 1, t = 0; for (let i = 0; i < 6; i++) { const v = 1 - Math.abs(n1(x, z) * 2 - 1); s += v * a; t += a; a *= .5; x *= 2.07; z *= 2.07; } return s / t; };
@@ -568,7 +623,7 @@ function iceGrid() {
     const Ri = Math.pow(ax / 1570, 2.6) + Math.pow(Math.abs(z - 10) / 1075, 2.2);
     let dc = (1 - Ri) * 430 + wob * (Math.hypot(ax - 1200, z - 60) < 420 ? 0.15 : 1);
     const bz = x < 0 ? 660 : 820;                // the blue harbour sits further south, below its airfield
-    dc = Math.min(dc, (Math.hypot(ax - 1215 + (z - bz) * 0.25, (z - bz) / 1.25) - 190 + wob * 0.6) * 1.4);
+    if (MAP_ID === 'ice') dc = Math.min(dc, (Math.hypot(ax - 1215 + (z - bz) * 0.25, (z - bz) / 1.25) - 190 + wob * 0.6) * 1.4);
     let h = 7 + fbm(n2, x * 0.003 + 5, z * 0.003, 4) * 22;
     // mountains: ridged fractal inside the range masks
     let mask = 0;
@@ -581,7 +636,7 @@ function iceGrid() {
     mask = Math.max(Math.min(1, mask), smooth(1.0, 0.72, Rm)) * smooth(900 + (n3(x * 0.005, z * 0.005 + 9) - .5) * 200, 640, ax);
     if (mask > 0) h += Math.pow(mask, 0.9) * (190 + 480 * Math.pow(ridged(x * 0.0042, z * 0.0042), 1.6) * (0.55 + 0.7 * fbm(n3, x * 0.0038 + 3, z * 0.0038 - 4, 3)));
     // canyon floors
-    for (let ci = 0; ci < canyons.length; ci++) { const c = canyons[ci]; if (!inB(cbox[ci], x, z)) continue; const k = smooth(90, 22, segDist(x, z + (n2(x * 0.011, z * 0.011 + 31) - .5) * 34, c)); /* shivering walls */ if (k > 0) h = lerp(h, Math.min(h, 38 + 8 * n2(x * 0.008, z * 0.008)), k); }
+    for (let ci = 0; ci < canyons.length; ci++) { const c = canyons[ci]; if (!inB(cbox[ci], x, z)) continue; const k = smooth(MAP_ID === 'storm' ? 72 : 90, 20, segDist(x, z + (n2(x * 0.011, z * 0.011 + 31) - .5) * 34, c)); /* shivering walls */ if (k > 0) h = lerp(h, Math.min(h, 38 + 8 * n2(x * 0.008, z * 0.008)), k); }
     // flat bases and runways (same as the first map)
     let flat = 0;
     for (const b of BASES) flat = Math.max(flat, 1 - smooth(BASE_R + 50, BASE_R + 190, Math.hypot(x - b.x, z - b.z)));
@@ -593,11 +648,11 @@ function iceGrid() {
     if (dc < 0) h = Math.max(-26, 1.2 + dc * 0.17);
     g[j * ICE_NX + i] = h;
   }
-  ICE.grid = g;
+  ICE.grid = ICE.grids[key] = g;
   // the south coast line (for the ports): first water south of the middle of the island, every 10 m
   const cs = new Float32Array(Math.ceil((MAP_X * 2 + 1000) / 10) + 1);
   for (let k = 0; k < cs.length; k++) { const x = -MAP_X - 500 + k * 10; let z = 100; while (z < MAP_Z + 400 && iceH(x, z) > 0) z += 4; cs[k] = z; }
-  ICE.coast = cs;
+  ICE.coast = ICE.coasts[key] = cs;
   return g;
 }
 function iceH(x, z) {
@@ -620,15 +675,16 @@ function TOWN_PADS_INIT() {
 // switch the map: the world is rebuilt right after
 function applyMap(id) {
   MAP_ID = MAP_LIST.some(m => m.id === id) ? id : 'valley';
-  const ice = MAP_ID === 'ice';
+  const ice = ISLE(), storm = MAP_ID === 'storm';
   TOWN_PADS.length = 0;
   for (const p of (ice ? ICE.towns : VALLEY_PADS)) TOWN_PADS.push(Object.assign({}, p));
   coastZ = ice ? ICE.coastZ : VALLEY_COAST;
   roadZ = ice ? () => 1e6 : VALLEY_ROAD;
-  const sky = new THREE.Color(ice ? 0xb4bfc7 : 0xa3aaae);
-  SKY.copy(sky); scene.fog.color.copy(sky);
-  scene.fog.near = ice ? 420 : 520; scene.fog.far = ice ? 2500 : 2700;
-  hemi.color.set(ice ? 0xe4ecf2 : 0xdde2e5); hemi.groundColor.set(ice ? 0x8a929a : 0x504d42);
+  const sky = new THREE.Color(storm ? 0x0c1117 : ice ? 0xb4bfc7 : 0xa3aaae);
+  SKY.copy(sky); scene.fog.color.copy(sky); skyTop.set(storm ? 0x04060a : 0x868f97);
+  scene.fog.near = storm ? 80 : ice ? 420 : 520; scene.fog.far = storm ? 820 : ice ? 2500 : 2700;
+  hemi.color.set(storm ? 0x6a7e98 : ice ? 0xe4ecf2 : 0xdde2e5); hemi.groundColor.set(storm ? 0x0a0a0a : ice ? 0x8a929a : 0x504d42);
+  hemi.intensity = storm ? 0.16 : 1.45; sun.intensity = storm ? 0.2 : 1.25; sun.color.set(storm ? 0x9db4d8 : 0xe9e8e3);
   if (ice) iceGrid();
 }
 const waterUniforms = { uTime: { value: 0 } };
@@ -647,7 +703,7 @@ function buildWorld(seed) {
   const rand = mulberry32(seed);
   const n1 = makeNoise(mulberry32(777)), n2 = makeNoise(mulberry32(778));   // terrain is the same every match
   const fbm = (x, z) => { let s = 0, a = 1, f = 1; for (let i = 0; i < 5; i++) { s += (n1(x * f, z * f) - .5) * a; a *= .5; f *= 2.03; } return s; };
-  const ICEMAP = MAP_ID === 'ice';
+  const ICEMAP = ISLE(), WINTER = MAP_ID === 'ice', STORM = MAP_ID === 'storm';
   if (ICEMAP) H = iceH;
   else H = (x, z) => {
     // rolling hills, flattened at both bases and their runways
@@ -701,9 +757,23 @@ function buildWorld(seed) {
         cSand = new THREE.Color(1.9, 1.75, 1.3), cWet = new THREE.Color(1.1, 1.02, 0.86), cBase = new THREE.Color(1.15, 1.13, 1.1), cSnow = new THREE.Color(2.6, 2.65, 2.7), c = new THREE.Color();
   const cIce = new THREE.Color(0.8, 0.82, 0.86), cIce2 = new THREE.Color(0.72, 0.76, 0.82), cGrassW = new THREE.Color(0.5, 0.5, 0.4), cRockW = new THREE.Color(0.33, 0.34, 0.37),
         cPeak = new THREE.Color(0.9, 0.92, 0.96), cBaseW = new THREE.Color(0.6, 0.6, 0.6), cShore = new THREE.Color(0.55, 0.57, 0.6);
+  const cMud = new THREE.Color(1.0, 0.86, 0.66), cWetRock = new THREE.Color(0.72, 0.74, 0.78), cMoss = new THREE.Color(0.95, 1.1, 0.8), cBaseS = new THREE.Color(1.05, 1.05, 1.02);
   for (let i = 0; i < p2.count; i += 3) {
     const x = (p2.getX(i) + p2.getX(i + 1) + p2.getX(i + 2)) / 3, y = (p2.getY(i) + p2.getY(i + 1) + p2.getY(i + 2)) / 3, z = (p2.getZ(i) + p2.getZ(i + 1) + p2.getZ(i + 2)) / 3;
     const slope = 1 - nrm.getY(i);
+    if (STORM) {    // wet summer night: dark grass, mud on the tracks' sides, dark wet rock on the slopes, moss up high
+      c.copy(cG1).lerp(cG2, n2(x * 0.004, z * 0.004)).multiplyScalar(0.78);
+      if (y > 3 && y < 80 && n2(x * 0.012 + 4, z * 0.012) > 0.64) c.lerp(cMud, 0.5);
+      if (slope > 0.22) c.lerp(cWetRock, Math.min(1, (slope - 0.22) * 2.4));
+      if (y > 360) c.lerp(cMoss, smooth(360, 520, y) * 0.5);
+      for (const b of BASES) if (Math.hypot(x - b.x, z - b.z) < BASE_R) c.lerp(cBaseS, 0.35);
+      if (inPad(x, z, -4)) c.lerp(cBaseS, 0.25);
+      if (y < 3) c.lerp(cSand, smooth(3, 1, y) * 0.7);
+      if (y < 0) c.copy(cWet);
+      c.multiplyScalar(0.96 + rand() * 0.06);
+      for (let k = 0; k < 3; k++) { cols[(i + k) * 3] = c.r; cols[(i + k) * 3 + 1] = c.g; cols[(i + k) * 3 + 2] = c.b; }
+      continue;
+    }
     if (ICEMAP) {   // snow everywhere, grey rock on the steep slopes, a little dead grass showing through on the plains
       c.copy(cIce).lerp(cIce2, n2(x * 0.004, z * 0.004));
       if (y > 3 && y < 60 && n2(x * 0.012 + 4, z * 0.012) > 0.66) c.lerp(cGrassW, 0.55);
@@ -736,7 +806,7 @@ function buildWorld(seed) {
   tmat.onBeforeCompile = sh => { sh.fragmentShader = sh.fragmentShader.replace('#include <map_fragment>', `
     vec4 sampledDiffuseColor = texture2D( map, vMapUv );
     vec4 tex2 = texture2D( map, vMapUv * 0.213 + vec2(0.37, 0.71) );
-    diffuseColor *= mix( vec4(1.0), mix( sampledDiffuseColor, tex2, 0.45 ) * ${ICEMAP ? '2.6' : '1.0'}, ${ICEMAP ? '0.3' : '1.0'} );`); };
+    diffuseColor *= mix( vec4(1.0), mix( sampledDiffuseColor, tex2, 0.45 ) * ${WINTER ? '2.6' : '1.0'}, ${WINTER ? '0.3' : '1.0'} );`); };
   tmat.customProgramCacheKey = () => 'terrain_' + MAP_ID;
   const terrain = new THREE.Mesh(geo, tmat);
   terrain.receiveShadow = true;
@@ -744,7 +814,7 @@ function buildWorld(seed) {
 
   // ── sea ──
   const wgeo = ICEMAP ? new THREE.PlaneGeometry(SX + 2000, SZ + 2000, 200, 140) : new THREE.PlaneGeometry(SX + 2000, 2400, 160, 70); wgeo.rotateX(-Math.PI / 2); if (!ICEMAP) wgeo.translate(0, 0, MAP_Z);
-  const wmat = new THREE.MeshStandardMaterial({ color: ICEMAP ? 0x3b5f74 : 0x3f6d78, roughness: .35, metalness: .15, flatShading: true, transparent: true, opacity: .9 });
+  const wmat = new THREE.MeshStandardMaterial({ color: STORM ? 0x1e2c34 : ICEMAP ? 0x3b5f74 : 0x3f6d78, roughness: .35, metalness: .15, flatShading: true, transparent: true, opacity: .9 });
   wmat.onBeforeCompile = sh => {
     sh.uniforms.uTime = waterUniforms.uTime;
     sh.vertexShader = 'uniform float uTime;\n' + sh.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
@@ -914,7 +984,7 @@ function buildWorld(seed) {
     if (boxes.some(b => Math.abs(b.x - x) < b.hx + 4 && Math.abs(b.z - z) < b.hz + 4) || inPad(x, z, 12)) continue;
     trees.push({ x, y, z, s: 0.8 + rand() * 0.8, r: rand() * TAU });
   }
-  const pineMat = camFade(M(ICEMAP ? 0x3d5446 : 0x4b5e36, { roughness: 1 }), 3, 10), trunkMat = M(0x5a4a3a);
+  const pineMat = camFade(M(STORM ? 0x34482f : ICEMAP ? 0x3d5446 : 0x4b5e36, { roughness: 1 }), 3, 10), trunkMat = M(0x5a4a3a);
   const tr = new THREE.InstancedMesh(trunkGeo, trunkMat, trees.length), cr = new THREE.InstancedMesh(crownGeo, pineMat, trees.length);
   trees.forEach((t, i) => { dummy.position.set(t.x, t.y - .3, t.z); dummy.rotation.set(0, t.r, 0); dummy.scale.setScalar(t.s); dummy.updateMatrix(); tr.setMatrixAt(i, dummy.matrix); cr.setMatrixAt(i, dummy.matrix); });
   cr.castShadow = true;
@@ -1003,12 +1073,13 @@ function buildWorld(seed) {
   instance(new THREE.IcosahedronGeometry(1.5, 0), camFade(M(ICEMAP ? 0x55684f : 0x5a6e38, { roughness: 1 }), 3, 9), PR.bush, true, 0.75);
   instance(new THREE.DodecahedronGeometry(1, 0), M(0x7c7a72, { roughness: 1 }), PR.rock, true, 0.7);
   instance(new THREE.CylinderGeometry(1.1, 1.1, 1.5, 10), M(0xc9b060, { roughness: 1 }), PR.hay);
-  const cl = instance(new THREE.IcosahedronGeometry(1, 1), new THREE.MeshLambertMaterial({ color: 0xd9dcde, emissive: 0x6a6e72, fog: true, transparent: true, opacity: .9, depthWrite: false }), PR.cloud, false, 0.32);
+  const cl = instance(new THREE.IcosahedronGeometry(1, 1), new THREE.MeshLambertMaterial({ color: STORM ? 0x30353c : 0xd9dcde, emissive: STORM ? 0x0b0d10 : 0x6a6e72, fog: true, transparent: true, opacity: .9, depthWrite: false }), PR.cloud, false, 0.32);
   if (cl) cl.frustumCulled = false;
 
   compact(group, new Set([...world_radars, ...samSites.map(q => q.rad), ...samSites.map(q => q.turn), ...hangarsW.map(q => q.roof), ...decks]));
   scene.add(group);
   world = { group, boxes, trees, samSites, seed, map: MAP_ID, boxGrid: new Map(), hangars: hangarsW };
+  stormSetup();
   for (const b of boxes) gridAddBox(b);
   world.treeState = plantTrees(group, trees, treeProc);
   world.towns = setupTowns(group, seed);
@@ -1126,6 +1197,80 @@ function updateGrass() {
     grassMesh.setMatrixAt(i, _gd.matrix); ch = true;
   }
   if (ch) grassMesh.instanceMatrix.needsUpdate = true;
+}
+
+// ═══════════ NIGHT STORM (map 'storm') ═══════════
+// rain around the camera, lightning with thunder, warm lamps and a sweeping searchlight at each base,
+// and headlights on the machine you drive
+const STORM = { rain: null, seeds: null, lights: [], search: [], head: null, flashT: 0, nextFlash: 8, flashSeq: null };
+(() => {
+  const N = 7000, pos = new Float32Array(N * 6);
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const rain = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0x8ea3b8, transparent: true, opacity: 0.42 }));
+  rain.frustumCulled = false; rain.visible = false; rain.renderOrder = 2; scene.add(rain);
+  STORM.rain = rain; STORM.seeds = Array.from({ length: N }, () => [Math.random() * 260 - 130, Math.random() * 110, Math.random() * 260 - 130]);
+  const head = new THREE.SpotLight(0xfff2d0, 0, 140, 0.42, 0.5, 1.2); head.visible = false; scene.add(head, head.target);
+  STORM.head = head;
+})();
+// called right after buildWorld: lamps and searchlights for this map (they live in the world group)
+function stormSetup() {
+  const on = MAP_ID === 'storm';
+  STORM.rain.visible = on; STORM.head.visible = on; STORM.lights = []; STORM.search = [];
+  audio.rain(on);
+  treeTint();
+  if (!on || !world) return;
+  for (const team of [0, 1]) {
+    const B = BASES[team], sx = team ? -1 : 1;
+    for (const [ox, oz] of [[60, 0], [-30, 60], [-60, -100]]) {
+      const l = new THREE.PointLight(0xffc27a, 160, 90, 1.5); l.position.set(B.x + sx * ox, BASE_Y + 8, B.z + oz); world.group.add(l); STORM.lights.push(l);
+    }
+    const s = new THREE.SpotLight(0xdfe8ff, 500, 700, 0.1, 0.5, 1);
+    s.position.set(B.x + sx * 30, BASE_Y + 40, B.z - 70); world.group.add(s, s.target);
+    STORM.search.push({ s, team, a: team * 1.7 });
+  }
+}
+function updateStorm(dt) {
+  if (MAP_ID !== 'storm' || !STORM.rain.visible) return;
+  // rain: streaks falling around the camera
+  const pos = STORM.rain.geometry.attributes.position.array, t = performance.now() / 1000, c = camera.position, wind = Math.sin(t * 0.3) * 6;
+  for (let i = 0, n = STORM.seeds.length; i < n; i++) {
+    const s = STORM.seeds[i], y = ((s[1] - t * 42) % 110 + 110) % 110 - 35 + c.y, x = c.x + s[0] + wind * (y - c.y) * 0.05, z = c.z + s[2];
+    const o = i * 6; pos[o] = x; pos[o + 1] = y; pos[o + 2] = z; pos[o + 3] = x - 0.4; pos[o + 4] = y + 2.4; pos[o + 5] = z - 0.15;
+  }
+  STORM.rain.geometry.attributes.position.needsUpdate = true;
+  // searchlights sweep the field in front of each base
+  for (const q of STORM.search) {
+    q.a += dt * 0.35;
+    const B = BASES[q.team], sx = q.team ? -1 : 1;
+    q.s.target.position.set(B.x + sx * (330 + Math.sin(q.a * 0.7) * 120), 0, B.z + Math.sin(q.a) * 320);
+    q.s.target.updateMatrixWorld();
+  }
+  // my headlights
+  const v = myVehicle(), h = STORM.head;
+  if (v && v.alive && mode === 'drive' && !mySeat && ['tank', 'jeep', 'moto', 'icbm'].includes(v.type)) {
+    h.intensity = 160;
+    h.position.set(v.pos.x + Math.sin(v.h) * 3, v.pos.y + 2.2, v.pos.z + Math.cos(v.h) * 3);
+    h.target.position.set(v.pos.x + Math.sin(v.h) * 40, v.pos.y - 2, v.pos.z + Math.cos(v.h) * 40); h.target.updateMatrixWorld();
+  } else h.intensity = 0;
+  // lightning: two or three quick flashes every 12–30 s, thunder a moment later
+  STORM.nextFlash -= dt;
+  if (STORM.nextFlash <= 0) {
+    STORM.nextFlash = 12 + Math.random() * 18;
+    const d = Math.random();
+    STORM.flashSeq = [0.07, 0.09, 0.12, 0.25, Math.random() < 0.5 ? 0.08 : 0];
+    STORM.flashT = 0;
+    setTimeout(() => audio.thunder(d), 300 + d * 2500);
+  }
+  let flash = 0;
+  if (STORM.flashSeq) {
+    STORM.flashT += dt;
+    let acc = 0, on = true;
+    for (const len of STORM.flashSeq) { if (STORM.flashT < acc + len) { flash = on && len ? 1 : 0; break; } acc += len; on = !on; }
+    if (STORM.flashT > acc) STORM.flashSeq = null;
+  }
+  hemi.intensity = flash ? 2.2 : 0.16;
+  hemi.color.setHex(flash ? 0xc8d6ff : 0x6a7e98);
+  scene.fog.color.setHex(flash ? 0x4a5670 : 0x0c1117);
 }
 // ═══════════ TANK MODEL ═══════════
 // shared textures: grey camo (tinted per team via material colour), track tread, turret numbers
@@ -2403,7 +2548,10 @@ function prepTrees() {
     const imat = [sideMat, sideMat, topMat];
     TREE_KINDS.push({ parts, imp: { geo: ig, mat: imat }, h0, h1 });
   }
+  treeTint();
 }
+// the cut-out trees ignore the light: dim them on the night map
+function treeTint() { for (const k of TREE_KINDS) for (const m of k.imp.mat) m.color.setHex(MAP_ID === 'storm' ? 0x353b35 : 0xd8d8d8); }
 // trees: [{x, y, z, s (0.8..1.6), r}]; proc: the old procedural trees, shown until the models are in
 function plantTrees(group, trees, proc) {
   const st = { group, trees, proc, cells: new Map(), far: [], model: false };
@@ -3200,7 +3348,7 @@ let samLock = 0, samSeq = 0, flares = 3, flareCd = 0, samHidden = false;
 // Ледяной остров: a plane flying lower than the mountains around it is lost in the ground clutter —
 // the radars on the peaks can't pick it out, and missiles already in the air lose it too
 function terrainMasked(v) {
-  if (MAP_ID !== 'ice' || !v) return false;
+  if (!ISLE() || !v) return false;
   let top = H(v.pos.x, v.pos.z);
   for (let k = 0; k < 12; k++) {
     const a = k / 12 * TAU, c = Math.cos(a), s = Math.sin(a);
@@ -5107,6 +5255,7 @@ function buildMinimapBase() {
   for (let y = 0; y < MMH; y++) for (let x = 0; x < MMW; x++) {
     const wx = x / MMW * 2 * MMX - MMX, wz = y / MMH * 2 * MMZ - MMZ, hh = H(wx, wz), i = (y * MMW + x) * 4;
     if (hh < 0) { img.data[i] = 50; img.data[i + 1] = 92; img.data[i + 2] = 104; }
+    else if (MAP_ID === 'storm') { const e = 2 * MMX / MMW, sl = (H(wx + e, wz - e) - hh) / e, k = Math.min(1, hh / 520); img.data[i] = Math.max(20, Math.min(160, 62 + k * 50 + sl * 30)); img.data[i + 1] = Math.max(24, Math.min(170, 78 + k * 40 + sl * 30)); img.data[i + 2] = Math.max(20, Math.min(160, 56 + k * 55 + sl * 30)); }
     else if (MAP_ID === 'ice') {   // snow, darker with height, rock on the high ground
       const e = 2 * MMX / MMW, sl = (H(wx + e, wz - e) - hh) / e;            // light from the north-west
       const k = Math.min(1, hh / 520), r = hh > 3 ? Math.max(90, Math.min(250, 224 - k * 70 + sl * 40)) : 176;
@@ -5116,7 +5265,7 @@ function buildMinimapBase() {
     img.data[i + 3] = 255;
   }
   c.putImageData(img, 0, 0);
-  if (MAP_ID === 'ice') {                                         // dirt tracks
+  if (ISLE()) {                                                   // dirt tracks
     c.strokeStyle = 'rgba(120,98,76,.85)'; c.lineWidth = 1.6;
     for (const line of iceRoadSegs()) { c.beginPath(); line.forEach(([x, z], k) => { const [px, py] = mmP(x, z); k ? c.lineTo(px, py) : c.moveTo(px, py); }); c.stroke(); }
   }
@@ -5423,6 +5572,7 @@ function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
   if (inGame) adaptRes(dt);
   if (apPick) drawApMap();
+  updateStorm(dt);
   waterUniforms.uTime.value = now / 1000;
   updateBaseAlarm(now);
   if (inGame && world) {
