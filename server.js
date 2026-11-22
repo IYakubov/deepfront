@@ -329,6 +329,20 @@ io.on('connection', socket => {
     v.auto = socket.id; v.driver = null; p.vid = null;
     broadcastRoom(room);
   });
+  // strategic orders: free machines of my team move under my control (they only drive)
+  socket.on('order', vids => {
+    const p = me(); if (!p || !room || room.state !== 'playing' || !Array.isArray(vids)) return;
+    for (const vid of vids.slice(0, 40)) {
+      const v = room.vehicles.find(x => x.vid === vid);
+      if (!v || !v.alive || v.team !== p.team || v.driver || (v.auto && v.auto !== socket.id) || !['tank', 'jeep', 'moto', 'icbm', 'plane', 'ship'].includes(v.type)) continue;
+      v.auto = socket.id;
+    }
+    broadcastRoom(room);
+  });
+  socket.on('unorder', vid => {
+    const v = room && room.vehicles.find(x => x.vid === vid);
+    if (v && v.auto === socket.id) { v.auto = null; broadcastRoom(room); }
+  });
   socket.on('ast', (vid, s) => {
     if (!room || !Array.isArray(s)) return;
     const v = room.vehicles.find(x => x.vid === vid);

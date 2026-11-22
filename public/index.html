@@ -154,6 +154,10 @@ body.cmdv #bottom{display:none}
 #cmd .vr:hover{background:rgba(255,255,255,.07);border-color:var(--line)}
 #cmd .vr.off{opacity:.45;cursor:default}
 #cmd .vr.mine{border-color:var(--acc)}
+#cmd .vr.sel{border-color:#ffb03a;background:rgba(255,176,58,.12)}
+#cmd .ct{display:flex;align-items:center;justify-content:space-between}
+#cmd .strat{font:700 8px Unbounded;letter-spacing:.1em;padding:4px 7px;border-radius:6px;border:1px solid var(--line);background:rgba(255,255,255,.05);color:var(--dim);cursor:pointer}
+#cmd .strat.on{border-color:#ffb03a;color:#ffb03a;background:rgba(255,176,58,.12)}
 #cmd .vr .ic{width:26px;text-align:center;font-size:14px}
 #cmd .vr .nm{flex:1}
 #cmd .vr .st{font-size:8px;color:var(--dim);font-weight:600}
@@ -256,9 +260,9 @@ body.cmdv #bottom{display:none}
   </div>
   <canvas id="minimap" width="520" height="360"></canvas>
   <div id="cmd">
-    <div class="ct">ТЕХНИКА БАЗЫ</div>
+    <div class="ct">ТЕХНИКА БАЗЫ <button id="stratBtn" class="strat">СТРАТЕГИЯ</button></div>
     <div id="cmdlist"></div>
-    <div class="ch">Кликните по технике на карте или в списке, чтобы сесть в неё.<br><kbd>WASD</kbd> / перетаскивание ПКМ — двигать карту · колесо — высота</div>
+    <div class="ch">Кликните по технике на карте или в списке, чтобы сесть в неё.<br><kbd>WASD</kbd> / перетаскивание ПКМ — двигать карту · колесо — высота<br><b>Приказы:</b> <kbd>Ctrl</kbd>+клик — выбрать технику (или включите «Стратегию», <kbd>G</kbd>), затем клик по земле — едут туда строем · <kbd>Esc</kbd> — снять выбор</div>
   </div>
   <div id="board"></div>
   <div id="apmap"><div class="aphead"><b>АВТОПИЛОТ Li L9</b><span>Кликните на карте — машина поедет туда сама и будет ждать</span></div>

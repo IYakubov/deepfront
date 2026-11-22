@@ -3304,6 +3304,8 @@ addEventListener('keydown', e => {
   if (e.code === 'Tab') { e.preventDefault(); $('board').classList.add('on'); renderBoard(); }
   if (e.code === 'KeyM') audio.toggle();
   if (e.code === 'Enter') { e.preventDefault(); openChat(); }
+  if (e.code === 'KeyG' && mode === 'cmd') setStrat(!stratOn);
+  if (e.code === 'Escape' && mode === 'cmd' && stratSel.size) { stratSel.clear(); renderCmdList(); return; }
   if (e.code === 'Escape' && mode === 'cmd') { $('pLobbyBtn').style.display = isHost() ? '' : 'none'; showScreen($('pause').classList.contains('on') ? null : 'pause'); }
   const v = myVehicle();
   if (mode === 'drive' && v && v.alive) {
@@ -4300,6 +4302,373 @@ function drawApMap() {
   }
 }
 
+// ═══════════ STRATEGIC ORDERS ═══════════
+// In the commander view: Ctrl+click machines (or turn on "Стратегия" and click), then click the ground —
+// they drive there in a parade formation (1 / 2 / 1+2 / 2+2 / 1+2+2 …), keeping their places on the way.
+// They only move: no shooting. Planes taxi on the ground and stop rather than hit anything; ships go by water.
+const ORDER_TYPES = ['tank', 'jeep', 'moto', 'icbm', 'plane', 'ship'];
+const stratSel = new Set();
+let stratOn = false, stratGroups = [];
+const orderable = v => !!v && v.alive && !v.dead && v.team === myTeam() && !v.driver && ORDER_TYPES.includes(v.type) && !(v.type === 'plane' && v.air) && !v.spent && (!v.auto || v.auto === myId);
+// footprint: width / length in metres (HITBOX: half sizes)
+const foot = v => { const b = HITBOX[v.skin === 'l9' ? 'l9' : v.type] || [2, 0, 2, 3]; return [b[0] * 2, b[3] * 2]; };
+const ORDER_SPEED = { tank: 14, jeep: 18, moto: 18, icbm: 10, plane: 9, ship: 9 };
+
+// rows from the front: odd → 1 in front, then pairs; even → pairs
+function formationRows(n) { const rows = []; let left = n; if (n % 2) { rows.push(1); left--; } while (left > 0) { rows.push(Math.min(2, left)); left -= 2; } return rows; }
+function formationSlots(n, w, l) {
+  const rows = formationRows(n), out = [];
+  rows.forEach((k, r) => { for (let c = 0; c < k; c++) out.push({ back: r * l, side: (c - (k - 1) / 2) * w }); });
+  return out;
+}
+// cost grids for the planner: land (no cliffs, no buildings) and water (deep enough for a ship)
+let orderGrids = null;
+function orderGrid(kind) {
+  if (!orderGrids || orderGrids.world !== world) orderGrids = { world };
+  if (orderGrids[kind]) return orderGrids[kind];
+  const c = new Float32Array(AGX * AGZ);
+  for (let k = 0; k < AGZ; k++) for (let i = 0; i < AGX; i++) {
+    const x = -MAP_X + (i + 0.5) * AG, z = -MAP_Z + (k + 0.5) * AG, h = H(x, z);
+    let cost = 1;
+    if (kind === 'water') { if (h > -4 || H(x + 12, z) > -2 || H(x - 12, z) > -2 || H(x, z + 12) > -2 || H(x, z - 12) > -2) cost = Infinity; }
+    else {
+      if (h < -0.6 || Math.abs(x) > MAP_X - 40 || Math.abs(z) > MAP_Z - 40) cost = Infinity;
+      else {
+        const sl = Math.max(Math.abs(H(x + 8, z) - H(x - 8, z)), Math.abs(H(x, z + 8) - H(x, z - 8))) / 16;
+        const lim = kind === 'plane' ? 0.22 : 0.42;
+        if (sl > lim) cost = Infinity; else cost += sl * sl * 14;
+        const m = kind === 'plane' ? 14 : 9;
+        for (const o of vehicles.values()) if (o.type === 'gunner' && Math.abs(o.pos.x - x) < m + 4 && Math.abs(o.pos.z - z) < m + 4) cost = Infinity;
+        if (boxesIn(x - m, z - m, x + m, z + m).some(b => b.y1 > h + 1.5 && Math.abs(x - b.x) < b.hx + m && Math.abs(z - b.z) < b.hz + m)) cost = Infinity;
+      }
+    }
+    c[k * AGX + i] = cost;
+  }
+  return (orderGrids[kind] = c);
+}
+function orderPath(sx, sz, dx, dz, kind) {
+  return autoPathOn(sx, sz, dx, dz, orderGrid(kind));
+}
+// A* on a given grid (same search as the L9 autopilot)
+function autoPathOn(sx, sz, dx, dz, c) {
+  const N = AGX * AGZ;
+  const cell = (x, z) => Math.max(0, Math.min(AGZ - 1, Math.floor((z + MAP_Z) / AG))) * AGX + Math.max(0, Math.min(AGX - 1, Math.floor((x + MAP_X) / AG)));
+  const s = cell(sx, sz), d = cell(dx, dz);
+  const g = new Float32Array(N).fill(Infinity), from = new Int32Array(N).fill(-1), done = new Uint8Array(N);
+  const heap = [], push = (n, f) => { heap.push([f, n]); let i = heap.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } };
+  const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = i * 2 + 1, r = l + 1; let m = i; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; i = m; } } return top; };
+  const hx = d % AGX, hz = (d / AGX) | 0, heur = n => Math.hypot(n % AGX - hx, ((n / AGX) | 0) - hz);
+  const sxI = s % AGX, szI = (s / AGX) | 0;
+  g[s] = 0; push(s, heur(s));
+  const nb = [[1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1], [1, 1, 1.414], [1, -1, 1.414], [-1, 1, 1.414], [-1, -1, 1.414]];
+  while (heap.length) {
+    const [, n] = pop(); if (done[n]) continue; done[n] = 1; if (n === d) break;
+    const ni = n % AGX, nk = (n / AGX) | 0;
+    for (const [di, dk, w] of nb) {
+      const i = ni + di, k = nk + dk; if (i < 0 || k < 0 || i >= AGX || k >= AGZ) continue;
+      const m = k * AGX + i;
+      let cm = c[m];
+      if (cm === Infinity && (Math.max(Math.abs(i - sxI), Math.abs(k - szI)) <= 2 || Math.max(Math.abs(i - hx), Math.abs(k - hz)) <= 1)) cm = 6;
+      if (cm === Infinity || done[m]) continue;
+      const ng = g[n] + w * ((c[n] === Infinity ? 6 : c[n]) + cm) / 2;
+      if (ng < g[m]) { g[m] = ng; from[m] = n; push(m, ng + heur(m)); }
+    }
+  }
+  if (from[d] < 0 && d !== s) return null;
+  const out = []; for (let n = d; n >= 0 && n !== s; n = from[n]) out.push({ x: -MAP_X + (n % AGX + 0.5) * AG, z: -MAP_Z + (((n / AGX) | 0) + 0.5) * AG });
+  out.reverse();
+  // smooth: drop points that a straight line skips safely
+  const ok = (a, b) => { const L = Math.hypot(b.x - a.x, b.z - a.z); for (let t = 0; t <= L; t += 8) { const x = a.x + (b.x - a.x) * t / L, z = a.z + (b.z - a.z) * t / L; if (c[cell(x, z)] === Infinity || c[cell(x, z)] > 3) return false; } return true; };
+  const sm = []; let a = { x: sx, z: sz };
+  for (let i = 0; i < out.length; i++) { if (i === out.length - 1 || !ok(a, out[i + 1])) { sm.push(out[i]); a = out[i]; } }
+  return sm;
+}
+// ── the order
+function issueOrder(dest) {
+  const all = [...stratSel].map(id => vehicles.get(id)).filter(orderable);
+  if (!all.length) { stratSel.clear(); return; }
+  const water = H(dest.x, dest.z) < -4;
+  const ships = all.filter(v => v.type === 'ship'), land = all.filter(v => v.type !== 'ship');
+  let sent = 0;
+  if (land.length) { if (water) logMsg('Наземная техника: точка в воде — выберите сушу'); else sent += makeGroup(land, dest, land.some(v => v.type === 'plane') ? 'plane' : 'land'); }
+  if (ships.length) { if (!water) logMsg('Корабли: точка на суше — выберите воду'); else sent += makeGroup(ships, dest, 'water'); }
+  if (sent) { audio.tone(880, 0.06, 0.05); logMsg('Приказ: <b>' + sent + '</b> ед. — к точке, строем'); }
+}
+function makeGroup(list, dest, kind) {
+  // drop them from groups they were in
+  for (const g of stratGroups) g.members = g.members.filter(m => !list.includes(m.v));
+  const cx = list.reduce((a, v) => a + v.pos.x, 0) / list.length, cz = list.reduce((a, v) => a + v.pos.z, 0) / list.length;
+  const path = orderPath(cx, cz, dest.x, dest.z, kind);
+  if (!path) { logMsg('Туда не проехать'); return 0; }
+  const pts = [{ x: cx, z: cz }, ...path.filter((p, i) => i < path.length - 1 ? true : Math.hypot(p.x - dest.x, p.z - dest.z) > 30), { x: dest.x, z: dest.z }];
+  const segL = []; let L = 0; for (let i = 1; i < pts.length; i++) { const d = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z); segL.push(d); L += d; }
+  // the way they face at the end: along the last 60 m or so of the route
+  let bi = pts.length - 2; while (bi > 0 && Math.hypot(pts[bi].x - dest.x, pts[bi].z - dest.z) < 60) bi--;
+  const last = pts.length - 1, fdx = pts[last].x - pts[bi].x, fdz = pts[last].z - pts[bi].z, fl = Math.hypot(fdx, fdz) || 1;
+  const dir = { x: fdx / fl, z: fdz / fl };
+  // spacing: the widest / longest of them + a metre and a half
+  const W = Math.max(...list.map(v => foot(v)[0])) + (kind === 'water' ? 12 : 1.5), Ln = Math.max(...list.map(v => foot(v)[1])) + (kind === 'water' ? 14 : 2);
+  const slots = formationSlots(list.length, W, Ln);
+  // the spot picked is too steep / too tight for the whole column: the nearest one that fits
+  {
+    const fits = (x, z) => slots.every(q => { const sx = x - dir.x * q.back - dir.z * q.side, sz = z - dir.z * q.back + dir.x * q.side; return (kind === 'water' ? [-24, 0, 24].every(o => H(sx + dir.x * o, sz + dir.z * o) < -4) : freeFor(list[0], sx, sz, { none: 1 }, kind === 'plane' ? 7 : 2.4)) || list.some(v => Math.hypot(v.pos.x - sx, v.pos.z - sz) < 5); });
+    if (!fits(dest.x, dest.z)) {
+      let best = null;
+      for (let r = 10; r <= 160 && !best; r += 10) for (let a = 0; a < 16 && !best; a++) { const x = dest.x + Math.cos(a / 16 * TAU) * r, z = dest.z + Math.sin(a / 16 * TAU) * r; if (fits(x, z)) best = { x, z }; }
+      if (best) {
+        dest = best;
+        while (pts.length > 2 && Math.hypot(pts[pts.length - 2].x - best.x, pts[pts.length - 2].z - best.z) < 30) pts.splice(pts.length - 2, 1);
+        pts[pts.length - 1] = best;
+        L = 0; segL.length = 0; for (let i = 1; i < pts.length; i++) { const d = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z); segL.push(d); L += d; }
+        let b2 = pts.length - 2; while (b2 > 0 && Math.hypot(pts[b2].x - best.x, pts[b2].z - best.z) < 60) b2--;
+        const ex = best.x - pts[b2].x, ez = best.z - pts[b2].z, el = Math.hypot(ex, ez) || 1; dir.x = ex / el; dir.z = ez / el;
+      }
+    }
+  }
+  // front slots to the machines nearest the destination, left/right by where they stand
+  const sorted = [...list].sort((a, b) => Math.hypot(a.pos.x - dest.x, a.pos.z - dest.z) - Math.hypot(b.pos.x - dest.x, b.pos.z - dest.z));
+  const rows = formationRows(list.length); let k = 0; const members = [];
+  for (const n of rows) {
+    const rowV = sorted.slice(k, k + n).sort((a, b) => ((a.pos.x - cx) * -dir.z + (a.pos.z - cz) * dir.x) - ((b.pos.x - cx) * -dir.z + (b.pos.z - cz) * dir.x));
+    rowV.forEach((v, c) => members.push({ v, slot: slots[k + c], done: false, stuckT: 0, lastPos: v.pos.clone(), checkT: 0, revT: 0 }));
+    k += n;
+  }
+  const speed = Math.min(...list.map(v => ORDER_SPEED[v.type] || 12));
+  const g = { kind, pts, segL, L, dir, members, s: Math.max(...members.map(m => m.slot.back)) + 10, speed, done: false, sendT: 0 };
+  g.s = Math.min(g.s, g.L);
+  stratGroups.push(g);
+  socket.emit('order', list.map(v => v.vid));
+  for (const v of list) { v.auto = myId; v.ai = null; v.order = g; v.f1 = 0; }
+  stratSel.clear();
+  return list.length;
+}
+// a point on the group's route at arc length s, and the direction there
+function routeAt(g, s) {
+  if (s >= g.L) return { x: g.pts[g.pts.length - 1].x + g.dir.x * (s - g.L), z: g.pts[g.pts.length - 1].z + g.dir.z * (s - g.L), dx: g.dir.x, dz: g.dir.z };
+  s = Math.max(0, s);
+  for (let i = 0; i < g.segL.length; i++) {
+    if (s <= g.segL[i] || i === g.segL.length - 1) {
+      const a = g.pts[i], b = g.pts[i + 1], t = g.segL[i] ? Math.min(1, s / g.segL[i]) : 0, L = g.segL[i] || 1;
+      return { x: a.x + (b.x - a.x) * t, z: a.z + (b.z - a.z) * t, dx: (b.x - a.x) / L, dz: (b.z - a.z) / L };
+    }
+    s -= g.segL[i];
+  }
+}
+// where a member should be right now: its place in the column, on the road behind the leader
+function slotTarget(g, m) {
+  const fin = g.s >= g.L;
+  const p = fin ? { x: g.pts[g.pts.length - 1].x, z: g.pts[g.pts.length - 1].z, dx: g.dir.x, dz: g.dir.z } : routeAt(g, g.s - m.slot.back);
+  const back = fin ? m.slot.back : 0;
+  let x = p.x - p.dx * back + p.dz * -m.slot.side, z = p.z - p.dz * back + -p.dx * -m.slot.side;
+  // the side place is in a wall / the water: stay on the route itself; something standing on the route: the next free spot along it
+  if (!fin && !freeFor(m.v, x, z, g, 2)) {
+    x = p.x; z = p.z;
+    for (let e = 6; e <= 36 && !freeFor(m.v, x, z, g, 2); e += 6) { const q = routeAt(g, g.s - m.slot.back + e); x = q.x; z = q.z; }
+  }
+  return { x, z, dx: p.dx, dz: p.dz, fin };
+}
+const orderFree = (v, x, z) => v.type === 'ship' ? H(x, z) < -3.5 : H(x, z) > -1 && !blocked(x, z, v.type === 'plane' ? 6 : 1.6, v);
+// free ground for a member: buildings, water, and machines that are not in its own column
+function freeFor(v, x, z, g, r) {
+  if (v.type === 'ship') return H(x, z) < -3.5;
+  const h = H(x, z);
+  if (h < -1 || Math.abs(x) > MAP_X - 60 || z < -MAP_Z + 60 || z > MAP_Z) return false;
+  if (Math.hypot(H(x + 3, z) - H(x - 3, z), H(x, z + 3) - H(x, z - 3)) / 6 > (v.type === 'plane' ? 0.25 : 0.55)) return false;   // too steep to drive up
+  for (const b of boxesIn(x - r, z - r, x + r, z + r)) if (Math.abs(x - b.x) < b.hx + r && Math.abs(z - b.z) < b.hz + r && b.y1 > h + 0.5 && b.y0 < h + 4) return false;
+  for (const o of vehicles.values()) {
+    if (o === v || !o.vis.g.visible || (o.type === 'plane' && o.air) || o.type === 'drone' || o.type === 'soldier' || o.order === g) continue;
+    const rr = o.type === 'ship' ? 0 : o.type === 'plane' ? 6 : o.type === 'icbm' ? 6 : o.type === 'tank' ? 2.4 : 1.8;
+    if (rr && Math.hypot(x - o.pos.x, z - o.pos.z) < r + rr) return false;
+  }
+  return true;
+}
+const lineFree = (v, x0, z0, x1, z1, g, r) => { const L = Math.hypot(x1 - x0, z1 - z0); for (let t = 3; t < L; t += 3) if (!freeFor(v, x0 + (x1 - x0) * t / L, z0 + (z1 - z0) * t / L, g, r)) return false; return true; };
+// a fine (4 m) A* around the machine, to get out of a crowded park or round a building to its place
+function localPath(v, tx, tz, g, r) {
+  const C = 4, x0 = Math.min(v.pos.x, tx) - 50, z0 = Math.min(v.pos.z, tz) - 50;
+  const nx = Math.min(110, Math.ceil((Math.abs(tx - v.pos.x) + 100) / C)), nz = Math.min(110, Math.ceil((Math.abs(tz - v.pos.z) + 100) / C));
+  const id = (i, k) => k * nx + i, N = nx * nz;
+  const free = new Int8Array(N).fill(-1), isFree = n => { if (free[n] < 0) free[n] = freeFor(v, x0 + (n % nx + .5) * C, z0 + (((n / nx) | 0) + .5) * C, g, r) ? 1 : 0; return free[n] === 1; };
+  const ci = x => Math.max(0, Math.min(nx - 1, Math.floor((x - x0) / C))), ck = z => Math.max(0, Math.min(nz - 1, Math.floor((z - z0) / C)));
+  const s = id(ci(v.pos.x), ck(v.pos.z)), d = id(ci(tx), ck(tz));
+  const gs = new Float32Array(N).fill(Infinity), from = new Int32Array(N).fill(-1);
+  const open = [[0, s]]; gs[s] = 0; let it = 0;
+  while (open.length && it++ < 6000) {
+    let bi = 0; for (let i = 1; i < open.length; i++) if (open[i][0] < open[bi][0]) bi = i;
+    const [, n] = open.splice(bi, 1)[0]; if (n === d) break;
+    const ni = n % nx, nk = (n / nx) | 0;
+    for (const [di, dk, w] of [[1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1], [1, 1, 1.41], [1, -1, 1.41], [-1, 1, 1.41], [-1, -1, 1.41]]) {
+      const i = ni + di, k = nk + dk; if (i < 0 || k < 0 || i >= nx || k >= nz) continue;
+      const m = id(i, k); if (m !== d && !isFree(m)) continue;
+      const ng = gs[n] + w; if (ng < gs[m]) { gs[m] = ng; from[m] = n; open.push([ng + Math.hypot(i - d % nx, k - ((d / nx) | 0)), m]); }
+    }
+  }
+  if (from[d] < 0) return null;
+  const out = []; for (let n = d; n >= 0 && n !== s; n = from[n]) out.push({ x: x0 + (n % nx + .5) * C, z: z0 + (((n / nx) | 0) + .5) * C });
+  out.reverse();
+  const sm = []; let a = { x: v.pos.x, z: v.pos.z };
+  for (let i = 0; i < out.length; i++) if (i === out.length - 1 || !lineFree(v, a.x, a.z, out[i + 1].x, out[i + 1].z, g, r)) { sm.push(out[i]); a = out[i]; }
+  return sm;
+}
+// every frame, for the groups I lead
+function updateOrders(dt) {
+  for (const g of stratGroups) {
+    g.members = g.members.filter(m => m.v.alive && !m.v.dead && m.v.auto === myId && m.v.order === g && m.v.vid !== myVid);
+    if (!g.members.length) { g.done = true; continue; }
+    // the head of the column moves on only while everybody keeps up
+    // (a machine still on its way to join the column doesn't hold the others; it catches up)
+    let lag = 0, waitT = g.waitT || 0;
+    for (const m of g.members) { const t = slotTarget(g, m), d = Math.hypot(t.x - m.v.pos.x, t.z - m.v.pos.z); if (d < 15) m.joined = true; if (m.joined) lag = Math.max(lag, d); }
+    const k = lag < 18 ? 1 : lag < 35 ? 0.4 : waitT > 6 ? 0.3 : 0;            // never wait forever for one stuck machine
+    g.waitT = lag < 35 ? 0 : waitT + dt;
+    if (g.s < g.L) g.s = Math.min(g.L, g.s + g.speed * dt * k);
+    let allIn = g.s >= g.L;
+    for (const m of g.members) { orderMove(g, m, dt); if (!m.done) allIn = false; }
+    if (allIn) {                                   // in place: hand them back (free to take)
+      for (const m of g.members) { m.v.order = null; m.v.auto = null; socket.emit('ast', m.v.vid, stateOf(m.v)); socket.emit('unorder', m.v.vid); m.v.tpos.copy(m.v.pos); m.v.th = m.v.h; }
+      g.done = true;
+    }
+  }
+  stratGroups = stratGroups.filter(g => !g.done);
+}
+function orderMove(g, m, dt) {
+  const v = m.v, t = slotTarget(g, m);
+  const dist = Math.hypot(t.x - v.pos.x, t.z - v.pos.z);
+  const ship = v.type === 'ship', plane = v.type === 'plane', tank = v.type === 'tank';
+  m.finT = t.fin ? (m.finT || 0) + dt : 0;
+  const arrive = (ship ? 30 : plane ? 5 : tank ? 2.5 : 3.5) + (m.finT > 10 ? 6 : 0);     // cars can't shuffle on the spot: close is close enough
+  let wantH, wantS;
+  if (t.fin && dist < arrive) {                    // in place: face the way of the column, then stand
+    wantH = Math.atan2(t.dx, t.dz); wantS = 0;
+    if (Math.abs(v.speed) < (m.finT > 10 ? 2 : 0.6) && (!tank || Math.abs(wrap(wantH - v.h)) < 0.08 || m.finT > 14)) m.done = true;
+    if (!tank) wantH = v.h;
+  } else {
+    m.done = false;
+    // aim a little ahead along the route when close, so the column flows
+    let ax = t.x, az = t.z;
+    if (dist < 10 && !t.fin) { ax += t.dx * 10; az += t.dz * 10; }
+    // the straight way is blocked (a crowded park, a building): find a way round on a fine grid
+    const rr = plane ? 7 : ship ? 0 : tank ? 2.2 : 1.6;
+    m.planT = (m.planT || 0) - dt;
+    if (!ship && dist > 6) {
+      if (m.lp && m.lp.length) { const w = m.lp[0]; if (Math.hypot(w.x - v.pos.x, w.z - v.pos.z) < 4) m.lp.shift(); }
+      if (m.planT <= 0) { m.planT = 1.5; m.lp = lineFree(v, v.pos.x, v.pos.z, ax, az, g, rr) ? null : localPath(v, ax, az, g, rr); }
+      if (m.lp && m.lp.length) { ax = m.lp[0].x; az = m.lp[0].z; }
+    } else m.lp = null;
+    wantH = Math.atan2(ax - v.pos.x, az - v.pos.z);
+    wantS = Math.min(ORDER_SPEED[v.type] * 1.3, t.fin ? Math.max(2, dist * 0.5) : g.speed + dist * 0.35);
+    // obstacles: look ahead, swing round
+    const r = plane ? 9 : ship ? 26 : 8;
+    const probe = (a, d) => freeFor(v, v.pos.x + Math.sin(a) * d, v.pos.z + Math.cos(a) * d, g, plane ? 7 : ship ? 0 : 1.8);
+    if (m.avoidT > 0) { m.avoidT -= dt; if (probe(wantH + m.avoidDa, r)) wantH += m.avoidDa; else m.avoidT = 0; }   // keep going round the obstacle
+    else if (!probe(wantH, r) || !probe(wantH, r * 2)) {
+      let found = false;
+      const order = (m.side || 1) > 0 ? [0.35, -0.35, 0.7, -0.7, 1.1, -1.1, 1.6, -1.6] : [-0.35, 0.35, -0.7, 0.7, -1.1, 1.1, -1.6, 1.6];
+      for (const da of order) if (probe(wantH + da, r) && probe(wantH + da, r * 1.8)) { wantH += da; m.avoidDa = da; m.avoidT = 1.2; m.side = Math.sign(da); found = true; break; }
+      if (!found) wantS = plane || ship ? 0 : wantS;      // planes and ships wait instead of pushing on
+    }
+    const err = Math.abs(wrap(wantH - v.h));
+    if (err > 0.9) wantS = Math.min(wantS, tank ? 0 : 6); else if (err > 0.4) wantS = Math.min(wantS, 10);
+    // stuck: back up for a moment (not planes: they just wait)
+    m.checkT += dt;
+    // pushing but not moving for over a second (turning on the spot doesn't count): back up and go round
+    if (wantS > 3 && Math.abs(v.speed) < 1 && m.revT <= 0) m.pushT = (m.pushT || 0) + dt; else if (Math.abs(v.speed) > 2) m.pushT = 0;
+    if (!plane && !ship && m.pushT > 1.4) { m.pushT = 0; m.revT = 1.3; m.side = -(m.side || 1); m.avoidDa = 0.9 * m.side; m.avoidT = 2.6; }
+    if (m.revT > 0) { m.revT -= dt; wantS = -4; wantH = v.h - (m.avoidDa || 0); }
+  }
+  orderPhysics(v, dt, wantH, wantS);
+  v.f1 = 0; v.aimYaw = wrap(v.aimYaw + Math.max(-dt, Math.min(dt, wrap(v.h - v.aimYaw)))); v.aimPitch *= 0.9;
+  updateVis(v, dt);
+  m.sendT = (m.sendT || 0) - dt;
+  if (m.sendT <= 0) { m.sendT = 0.1; socket.emit('ast', v.vid, stateOf(v)); }
+}
+function orderPhysics(v, dt, wantH, wantS) {
+  const ship = v.type === 'ship', plane = v.type === 'plane', tank = v.type === 'tank';
+  const acc = ship ? 1.2 : plane ? 3 : tank ? 6 : 10;
+  v.speed += Math.max(-acc * 1.5 * dt, Math.min(acc * dt, wantS - v.speed));
+  // turning: tanks on the spot, cars and planes need speed, ships slowly
+  const err = wrap(wantH - v.h);
+  const rate = tank ? 0.75 : ship ? 0.12 * Math.min(1, Math.abs(v.speed) / 5 + 0.15) : plane ? 0.45 * Math.min(1, Math.abs(v.speed) / 3 + 0.1) : 1.2 * Math.min(1, Math.abs(v.speed) / 4 + 0.05);
+  const nh = wrap(v.h + Math.max(-rate * dt, Math.min(rate * dt, err)) * (v.speed < -0.3 && !tank ? -1 : 1));
+  const nx = v.pos.x + Math.sin(nh) * v.speed * dt, nz = v.pos.z + Math.cos(nh) * v.speed * dt;
+  if (ship) {
+    const ok = [-22, 0, 22].every(o => H(nx + Math.sin(nh) * o, nz + Math.cos(nh) * o) < -3.5);
+    if (ok) { v.pos.x = nx; v.pos.z = nz; } else v.speed = 0;
+    v.h = nh; v.pos.y = 0; v.p = 0; v.r *= 0.9;
+  } else {
+    const r = plane ? 6 : tank ? 1.9 : v.type === 'moto' ? 0.9 : v.type === 'icbm' ? 2.5 : 1.4;
+    if (H(nx, nz) < -1.4 || blocked(nx, nz, r, v) || (plane && !freeFor(v, nx, nz, {}, 7))) { v.speed = plane ? 0 : v.speed * -0.2; v.h = nh; }    // a plane never rams anything (wings included)
+    else { v.pos.x = nx; v.pos.z = nz; v.h = nh; }
+    if (!plane) slopePhysics(v, dt, r);
+    const dims = plane ? [3, 2] : tank ? [3.3, 1.45] : v.type === 'moto' ? [0.9, 0.7] : v.type === 'icbm' ? [5, 1.8] : [1.45, 1.1];
+    const gf = groundFollow(v, v.pos.x, v.pos.z, dims[0], dims[1]);
+    if (plane) { v.air = false; v.p = gf.p * 0.5; v.r = gf.r * 0.5; v.pos.y = gf.hc + 1.6; }
+    else { v.p += (gf.p - v.p) * Math.min(1, dt * 8); v.r += (gf.r - v.r) * Math.min(1, dt * 8); v.pos.y = restY(gf, v.p, v.r); }
+  }
+  v.tpos.copy(v.pos); v.th = v.h;
+}
+// ── commander-view controls
+function stratClickVehicle(v, add) {
+  if (!orderable(v)) { logMsg(v.driver ? 'Этой техникой управляет игрок' : v.type === 'plane' && v.air ? 'Самолёт в воздухе' : 'Эта техника не принимает приказы'); return; }
+  if (!add) { const had = stratSel.has(v.vid) && stratSel.size === 1; stratSel.clear(); if (!had) stratSel.add(v.vid); }
+  else if (stratSel.has(v.vid)) stratSel.delete(v.vid); else stratSel.add(v.vid);
+  audio.tone(stratSel.has(v.vid) ? 700 : 420, 0.04, 0.04);
+  renderCmdList();
+}
+// the ground under the mouse in the commander view
+function groundUnderMouse() {
+  _ray.setFromCamera(_v2d.set(mouseX / innerWidth * 2 - 1, -(mouseY / innerHeight) * 2 + 1), camera);
+  const o = _ray.ray.origin, d = _ray.ray.direction;
+  let t = 0, prev = 0;
+  for (; t < 6000; t += 6) { const x = o.x + d.x * t, z = o.z + d.z * t, y = o.y + d.y * t; if (y < Math.max(H(x, z), 0)) break; prev = t; }
+  if (t >= 6000) return null;
+  for (let i = 0; i < 12; i++) { const m = (t + prev) / 2, x = o.x + d.x * m, z = o.z + d.z * m, y = o.y + d.y * m; if (y < Math.max(H(x, z), 0)) t = m; else prev = m; }
+  return { x: o.x + d.x * t, z: o.z + d.z * t };
+}
+const _ray = new THREE.Raycaster(), _v2d = new THREE.Vector2();
+// selection rings, the locator and the planned formation, in the commander view
+function drawStrat(c) {
+  for (const id of stratSel) {
+    const v = vehicles.get(id); if (!v || !orderable(v)) { stratSel.delete(id); continue; }
+    const p = project(_v1.copy(v.pos).setY(v.pos.y + (v.type === 'ship' ? 14 : 4))); if (!p) continue;
+    c.strokeStyle = '#ffb03a'; c.lineWidth = 2.5; c.setLineDash([5, 4]); c.beginPath(); c.arc(p[0], p[1], 24, 0, TAU); c.stroke(); c.setLineDash([]);
+  }
+  // groups on the move: the line to where they're going
+  for (const g of stratGroups) {
+    const e = g.pts[g.pts.length - 1], pe = project(_v1.set(e.x, Math.max(0, H(e.x, e.z)) + 2, e.z));
+    if (pe) { c.strokeStyle = 'rgba(255,176,58,.85)'; c.lineWidth = 2; c.beginPath(); c.arc(pe[0], pe[1], 9, 0, TAU); c.moveTo(pe[0] - 14, pe[1]); c.lineTo(pe[0] + 14, pe[1]); c.moveTo(pe[0], pe[1] - 14); c.lineTo(pe[0], pe[1] + 14); c.stroke(); }
+  }
+  if (!stratSel.size || cmdHover) return;
+  const gp = groundUnderMouse(); if (!gp) return;
+  const sel = [...stratSel].map(id => vehicles.get(id)).filter(Boolean);
+  const ships = sel.some(v => v.type === 'ship'), land = sel.some(v => v.type !== 'ship'), water = H(gp.x, gp.z) < -4;
+  const ok = (water && ships) || (!water && land);
+  // preview of the formation, facing from the group to the point
+  const cx = sel.reduce((a, v) => a + v.pos.x, 0) / sel.length, cz = sel.reduce((a, v) => a + v.pos.z, 0) / sel.length;
+  const dl = Math.hypot(gp.x - cx, gp.z - cz) || 1, dx = (gp.x - cx) / dl, dz = (gp.z - cz) / dl;
+  const grp = sel.filter(v => (v.type === 'ship') === water);
+  if (grp.length) {
+    const W = Math.max(...grp.map(v => foot(v)[0])) + (water ? 12 : 1.5), Ln = Math.max(...grp.map(v => foot(v)[1])) + (water ? 14 : 2);
+    c.fillStyle = 'rgba(255,176,58,.55)';
+    for (const s of formationSlots(grp.length, W, Ln)) {
+      const x = gp.x - dx * s.back - dz * s.side, z = gp.z - dz * s.back + dx * s.side, p = project(_v1.set(x, Math.max(0, H(x, z)) + 1, z));
+      if (p) { c.beginPath(); c.arc(p[0], p[1], 4, 0, TAU); c.fill(); }
+    }
+  }
+  const p = [mouseX, mouseY], col = ok ? '#ffb03a' : '#ff5a46', tt = performance.now() / 1000;
+  c.strokeStyle = col; c.lineWidth = 2;
+  c.beginPath(); c.arc(p[0], p[1], 15 + Math.sin(tt * 6) * 2, 0, TAU); c.stroke();
+  c.beginPath(); c.moveTo(p[0] - 26, p[1]); c.lineTo(p[0] - 8, p[1]); c.moveTo(p[0] + 8, p[1]); c.lineTo(p[0] + 26, p[1]); c.moveTo(p[0], p[1] - 26); c.lineTo(p[0], p[1] - 8); c.moveTo(p[0], p[1] + 8); c.lineTo(p[0], p[1] + 26); c.stroke();
+  c.font = '700 11px Unbounded'; c.fillStyle = col; c.textAlign = 'left';
+  c.fillText(ok ? stratSel.size + ' ед. · клик — сюда строем' : water ? 'вода' : 'суша', p[0] + 20, p[1] - 18);
+}
+function setStrat(on) {
+  stratOn = on; if (!on) stratSel.clear();
+  $('stratBtn').classList.toggle('on', on); $('stratBtn').textContent = on ? 'СТРАТЕГИЯ: ВКЛ' : 'СТРАТЕГИЯ';
+  renderCmdList();
+}
+$('stratBtn').onclick = () => setStrat(!stratOn);
+
 // ═══════════ COMMANDER VIEW ═══════════
 const cmd = { x: -1200, z: 60, h: 520, tx: -1200, tz: 60, th: 520 };
 let cmdDrag = null, cmdHover = null, camTrans = 0, camTransAt = 0, mouseX = 0, mouseY = 0;
@@ -4315,7 +4684,9 @@ function cmdMouseMove(e) {
 }
 function cmdMouseDown(e) {
   if (e.button === 2) { cmdDrag = { x: e.clientX, y: e.clientY }; return; }
-  if (e.button === 0 && cmdHover) requestEnter(cmdHover.vid);
+  if (e.button !== 0) return;
+  if (cmdHover) { if (e.ctrlKey || e.metaKey || stratOn) stratClickVehicle(cmdHover, e.ctrlKey || e.metaKey); else requestEnter(cmdHover.vid); return; }
+  if (stratSel.size) { const gp = groundUnderMouse(); if (gp) issueOrder(gp); }
 }
 function cmdWheel(e) { cmd.th = Math.max(180, Math.min(1500, cmd.th * (e.deltaY > 0 ? 1.15 : 0.87))); }
 function updateCmd(dt) {
@@ -4357,7 +4728,7 @@ function updateCmd(dt) {
   const tip = $('cmdtip');
   if (cmdHover && !$('pause').classList.contains('on')) {
     tip.style.display = 'block'; tip.style.left = mouseX + 'px'; tip.style.top = mouseY + 'px';
-    tip.textContent = vName(cmdHover) + ' · ' + (cmdHover.driver ? (cmdHover.driver === myId ? 'вы' : 'занят: ' + nameOf(cmdHover.driver)) : 'свободен — клик, чтобы сесть') + ' · ' + cmdHover.hp + '/' + cmdHover.max;
+    tip.textContent = vName(cmdHover) + ' · ' + (cmdHover.driver ? (cmdHover.driver === myId ? 'вы' : 'занят: ' + nameOf(cmdHover.driver)) : stratOn ? 'клик — выбрать для приказа' : 'свободен — клик, чтобы сесть · Ctrl+клик — выбрать') + ' · ' + cmdHover.hp + '/' + cmdHover.max;
     canvas.style.cursor = seatFree(cmdHover) ? 'pointer' : 'not-allowed';
   } else { tip.style.display = 'none'; canvas.style.cursor = cmdDrag ? 'grabbing' : 'default'; }
 }
@@ -4379,6 +4750,7 @@ function takeControl(v, seat) {
   _camFrom.copy(camera.position); _camFromQ.copy(camera.quaternion);
   mySeat = seat ? 1 : 0;
   myVid = v.vid; mode = 'drive'; v.crashSent = false;
+  v.order = null; stratSel.delete(v.vid);
   if (mySeat) v.gunner = myId; else { v.driver = myId; v.auto = null; v.ai = null; if (v.gunner === myId) v.gunner = null; v.tpos.copy(v.pos); }
   if (v.type === 'ship') v.tel = 1;
   if (v.type === 'plane') v.thr = 0;
@@ -4414,13 +4786,14 @@ function renderCmdList() {
   const team = myTeam();
   const rows = room.vehicles.filter(d => d.team === team).map(d => {
     const v = vehicles.get(d.vid);
-    const st = !d.alive ? 'уничтожен' : d.spent ? 'ракет нет · вне игры' : d.auto ? 'автопилот' + (d.auto === myId ? '' : ' · ' + nameOf(d.auto)) : d.driver ? (d.driver === myId ? 'вы' : nameOf(d.driver)) : 'свободен';
+    const vv = vehicles.get(d.vid);
+    const st = !d.alive ? 'уничтожен' : d.spent ? 'ракет нет · вне игры' : vv && vv.order ? 'приказ: движение строем' : d.auto ? 'автопилот' + (d.auto === myId ? '' : ' · ' + nameOf(d.auto)) : d.driver ? (d.driver === myId ? 'вы' : nameOf(d.driver)) : 'свободен';
     const off = !d.alive || !seatFree(d);
-    return `<div class="vr ${off ? 'off' : ''} ${d.driver === myId ? 'mine' : ''}" data-v="${d.vid}"><span class="ic">${TYPE_ICON[d.type]}</span><span class="nm">${vName(d)}<br><span class="st">${st}</span></span><span class="hb"><i style="width:${Math.round(d.hp / d.max * 100)}%"></i></span></div>`;
+    return `<div class="vr ${off ? 'off' : ''} ${d.driver === myId ? 'mine' : ''} ${stratSel.has(d.vid) ? 'sel' : ''}" data-v="${d.vid}"><span class="ic">${TYPE_ICON[d.type]}</span><span class="nm">${vName(d)}<br><span class="st">${st}</span></span><span class="hb"><i style="width:${Math.round(d.hp / d.max * 100)}%"></i></span></div>`;
   }).join('');
   $('cmdlist').innerHTML = rows;
   $('cmdlist').querySelectorAll('.vr').forEach(el => {
-    el.onclick = () => requestEnter(el.dataset.v);
+    el.onclick = e => { const v = vehicles.get(el.dataset.v); if ((e.ctrlKey || e.metaKey || stratOn) && v) stratClickVehicle(v, e.ctrlKey || e.metaKey); else requestEnter(el.dataset.v); };
     el.onmouseenter = () => { const v = vehicles.get(el.dataset.v); if (v && v.alive) cmdCenterOn(v.pos.x, v.pos.z + 40); };
   });
 }
@@ -4627,8 +5000,9 @@ function drawCmdHud(c, w, h, now) {
     // hp arc
     c.lineWidth = 3; c.strokeStyle = v.hp / v.max > .5 ? '#9bcf5a' : v.hp / v.max > .25 ? '#e3a53c' : '#e0503f';
     c.beginPath(); c.arc(p[0], p[1], r + 4, -Math.PI / 2, -Math.PI / 2 + TAU * v.hp / v.max); c.stroke();
-    if (mine) { c.font = '700 9px Unbounded'; c.fillStyle = v.driver ? '#cfd5cc' : '#f3f1e8'; c.fillText(v.driver ? (v.driver === myId ? 'ВЫ' : nameOf(v.driver)) : v.auto ? 'АВТОПИЛОТ' : vName(v).toUpperCase(), p[0], p[1] + r + 16); }
+    if (mine) { c.font = '700 9px Unbounded'; c.fillStyle = v.driver ? '#cfd5cc' : '#f3f1e8'; c.fillText(v.driver ? (v.driver === myId ? 'ВЫ' : nameOf(v.driver)) : v.order ? 'ПРИКАЗ' : v.auto ? 'АВТОПИЛОТ' : vName(v).toUpperCase(), p[0], p[1] + r + 16); }
   }
+  drawStrat(c);
   // own repair hangar
   if (world.hangars) for (const hg of world.hangars) {
     if (hg.team !== team) continue;
@@ -5039,7 +5413,8 @@ function frame(now) {
   waterUniforms.uTime.value = now / 1000;
   updateBaseAlarm(now);
   if (inGame && world) {
-    for (const v of vehicles.values()) { if (isAuto(v)) autoDrive(v, dt); else if (v.vid !== myVid || mySeat === 1) updateRemote(v, dt, now); }
+    for (const v of vehicles.values()) { if (isAuto(v)) { if (!v.order) autoDrive(v, dt); } else if (v.vid !== myVid || mySeat === 1) updateRemote(v, dt, now); }
+    updateOrders(dt);
     if (mode === 'drive') { const v = myVehicle(); if (v && v.alive) updateAim(v); }
     updateMe(dt, now);
     for (const v of vehicles.values()) {
