@@ -4983,19 +4983,19 @@ function drawOrderRoutes(c, dim) {
         for (let k = i === 1 ? 0 : 1; k <= n; k++) { const x = a.x + (b.x - a.x) * k / n, z = a.z + (b.z - a.z) * k / n; sc.push(project(_v1.set(x, orderY(g, x, z), z))); }
       }
       const path = () => { c.beginPath(); let pen = false; for (const p of sc) { if (!p) { pen = false; continue; } if (pen) c.lineTo(p[0], p[1]); else { c.moveTo(p[0], p[1]); pen = true; } } };
-      c.setLineDash([]); c.strokeStyle = 'rgba(0,0,0,.35)'; c.lineWidth = 4.5; path(); c.stroke();
-      c.setLineDash([10, 9]); c.lineDashOffset = -t * 38;       // the dashes run towards where it's going
-      c.strokeStyle = dim ? 'rgba(255,176,58,.7)' : '#ffb03a'; c.lineWidth = 2.4; path(); c.stroke();
+      c.setLineDash([]); c.strokeStyle = 'rgba(0,0,0,.3)'; c.lineWidth = 2.6; path(); c.stroke();
+      c.setLineDash([8, 7]); c.lineDashOffset = -t * 32;       // the dashes run towards where it's going
+      c.strokeStyle = TEAM_CSS[myTeam()]; c.lineWidth = 1.4; path(); c.stroke();
       // its place at the end
       const end = sc[sc.length - 1];
-      if (end) { c.setLineDash([]); c.fillStyle = '#ffb03a'; c.beginPath(); c.arc(end[0], end[1], 4, 0, TAU); c.fill(); }
+      if (end) { c.setLineDash([]); c.fillStyle = TEAM_CSS[myTeam()]; c.beginPath(); c.arc(end[0], end[1], 3, 0, TAU); c.fill(); }
     }
   }
   c.restore();
 }
 function drawOrderRoutesMini(c) {
   const t = performance.now() / 1000;
-  c.save(); c.setLineDash([4, 4]); c.lineDashOffset = -t * 14; c.lineWidth = 1.6; c.strokeStyle = 'rgba(255,176,58,.9)';
+  c.save(); c.setLineDash([4, 4]); c.lineDashOffset = -t * 14; c.lineWidth = 1.2; c.strokeStyle = TEAM_CSS[myTeam()];
   for (const g of stratGroups) {
     if (g.done) continue;
     for (const m of g.members) {
@@ -5353,7 +5353,6 @@ function drawHud(now, dt) {
       if (pr) { c.strokeStyle = reload2 <= 0 ? '#ffb03a' : 'rgba(255,176,58,.35)'; c.lineWidth = 1.5; c.beginPath(); c.moveTo(pr[0] - 18, pr[1]); c.lineTo(pr[0] + 18, pr[1]); c.moveTo(pr[0], pr[1] - 18); c.lineTo(pr[0], pr[1] + 18); c.stroke(); }
     }
   }
-  if (!sniper) drawOrderRoutes(c, true);
   drawThreats(c, w, h, dt);
   if (!locked) { c.font = '700 12px Unbounded'; c.textAlign = 'center'; c.fillStyle = 'rgba(0,0,0,.55)'; c.fillRect(w / 2 - 170, h * 0.66 - 20, 340, 32); c.fillStyle = '#e3a53c'; c.fillText('КЛИКНИТЕ, ЧТОБЫ УПРАВЛЯТЬ', w / 2, h * 0.66); }
   if (now < matchStartAt) centerMsg(String(Math.ceil((matchStartAt - now) / 1000)), 'К БОЮ', 400);
