@@ -1892,8 +1892,12 @@ function whenModels(fn) { if (modelsDone) fn(); else modelWaiters.push(fn); }
     loadingUI(0.92, 'ПОДГОТОВКА ГРАФИКИ…');
     setTimeout(() => { try { warmup(); } catch (e) { console.error(e); } loadingUI(1, 'ГОТОВО'); setTimeout(() => loadingUI(-1), 250); }, 60);
   };
-  for (const n of names) L.load('models/' + n + '.glb?v=' + ASSET_V, gl => { gl.scene.updateMatrixWorld(true); MODELS[n] = gl.scene; prog[n] = 1; showProg(); done(); },
-    x => { if (x && x.total) { prog[n] = Math.min(0.99, x.loaded / x.total); showProg(); } }, e => { console.warn('model failed', n, e); prog[n] = 1; done(); });
+  // a model that fails to download (e.g. the server was restarting) is tried again, up to 5 times, before
+  // the game gives up on it and keeps the plain built-in shape for that machine
+  const get = (n, tries) => L.load('models/' + n + '.glb?v=' + ASSET_V + (tries ? '&r=' + tries : ''), gl => { gl.scene.updateMatrixWorld(true); MODELS[n] = gl.scene; prog[n] = 1; showProg(); done(); },
+    x => { if (x && x.total) { prog[n] = Math.min(0.99, x.loaded / x.total); showProg(); } },
+    e => { if (tries < 5) { setTimeout(() => get(n, tries + 1), 1200 * (tries + 1)); return; } console.warn('model failed', n, e); prog[n] = 1; done(); });
+  for (const n of names) get(n, 0);
   // sounds into the browser cache too (they are decoded once the audio starts)
   for (const a of ['siren', 'engine', 'shoot', 'hit', 'ricochet', 'energy', 'victory', 'missile_alert', 'explosion', 'tank_shot_1', 'tank_shot_2', 'tank_shot_3', 'ship']) fetch('audio/' + a + '.mp3').catch(() => {});
 }
@@ -3007,7 +3011,7 @@ function makeVehicle(d) {
   addDetail(d.type, vis, TEAM_COL[d.team]);
   if (d.type !== 'tank') compact(vis.g, visRefs(vis));
   realism(vis.g);
-  dressVis(d.type, vis, TEAM_COL[d.team]);
+  try { dressVis(d.type, vis, TEAM_COL[d.team]); } catch (e) { console.error('dress', d.vid, e); }
   scene.add(vis.g);
   const v = {
     vid: d.vid, team: d.team, type: d.type, skin: d.skin || null, n: d.n, vis, alive: d.alive, hp: d.hp, max: d.max, driver: d.driver, gunner: d.gunner || null,
