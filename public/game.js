@@ -4957,7 +4957,57 @@ function groundUnderMouse() {
 }
 const _ray = new THREE.Raycaster(), _v2d = new THREE.Vector2();
 // selection rings, the locator and the planned formation, in the commander view
+// the way each ordered machine still has to go: from where it is, along the group's route, to its own place at the end
+function orderLine(g, m) {
+  const v = m.v, out = [{ x: v.pos.x, z: v.pos.z }];
+  const s0 = g.s - m.slot.back;
+  let acc = 0;
+  for (let i = 1; i < g.pts.length - 1; i++) { acc += g.segL[i - 1]; if (acc > s0 + 8) out.push({ x: g.pts[i].x, z: g.pts[i].z }); }
+  const e = g.pts[g.pts.length - 1];
+  out.push({ x: e.x - g.dir.x * m.slot.back - g.dir.z * m.slot.side, z: e.z - g.dir.z * m.slot.back + g.dir.x * m.slot.side });
+  return out;
+}
+const orderY = (g, x, z) => g.kind === 'water' ? 2 : Math.max(0, H(x, z)) + 1.3;
+function drawOrderRoutes(c, dim) {
+  const t = performance.now() / 1000;
+  c.save(); c.lineCap = 'round'; c.lineJoin = 'round';
+  for (const g of stratGroups) {
+    if (g.done) continue;
+    for (const m of g.members) {
+      if (m.done || !m.v.alive || m.v.order !== g) continue;
+      const pts = orderLine(g, m);
+      // follow the ground: a point every 12 m, broken where it goes behind the camera
+      const sc = [];
+      for (let i = 1; i < pts.length; i++) {
+        const a = pts[i - 1], b = pts[i], n = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.z - a.z) / 12));
+        for (let k = i === 1 ? 0 : 1; k <= n; k++) { const x = a.x + (b.x - a.x) * k / n, z = a.z + (b.z - a.z) * k / n; sc.push(project(_v1.set(x, orderY(g, x, z), z))); }
+      }
+      const path = () => { c.beginPath(); let pen = false; for (const p of sc) { if (!p) { pen = false; continue; } if (pen) c.lineTo(p[0], p[1]); else { c.moveTo(p[0], p[1]); pen = true; } } };
+      c.setLineDash([]); c.strokeStyle = 'rgba(0,0,0,.35)'; c.lineWidth = 4.5; path(); c.stroke();
+      c.setLineDash([10, 9]); c.lineDashOffset = -t * 38;       // the dashes run towards where it's going
+      c.strokeStyle = dim ? 'rgba(255,176,58,.7)' : '#ffb03a'; c.lineWidth = 2.4; path(); c.stroke();
+      // its place at the end
+      const end = sc[sc.length - 1];
+      if (end) { c.setLineDash([]); c.fillStyle = '#ffb03a'; c.beginPath(); c.arc(end[0], end[1], 4, 0, TAU); c.fill(); }
+    }
+  }
+  c.restore();
+}
+function drawOrderRoutesMini(c) {
+  const t = performance.now() / 1000;
+  c.save(); c.setLineDash([4, 4]); c.lineDashOffset = -t * 14; c.lineWidth = 1.6; c.strokeStyle = 'rgba(255,176,58,.9)';
+  for (const g of stratGroups) {
+    if (g.done) continue;
+    for (const m of g.members) {
+      if (m.done || !m.v.alive || m.v.order !== g) continue;
+      const pts = orderLine(g, m); c.beginPath();
+      pts.forEach((p, i) => { const [x, y] = mmP(p.x, p.z); if (i) c.lineTo(x, y); else c.moveTo(x, y); }); c.stroke();
+    }
+  }
+  c.restore();
+}
 function drawStrat(c) {
+  drawOrderRoutes(c);
   for (const id of stratSel) {
     const v = vehicles.get(id); if (!v || !orderable(v)) { stratSel.delete(id); continue; }
     const p = project(_v1.copy(v.pos).setY(v.pos.y + (v.type === 'ship' ? 14 : 4))); if (!p) continue;
@@ -5187,6 +5237,40 @@ function project(p) {
   return [(_v5.x * .5 + .5) * innerWidth, (-_v5.y * .5 + .5) * innerHeight];
 }
 function ring(c, x, y, r, col, lw = 2) { c.lineWidth = lw + 2; c.strokeStyle = 'rgba(0,0,0,.4)'; c.beginPath(); c.arc(x, y, r, 0, TAU); c.stroke(); c.lineWidth = lw; c.strokeStyle = col; c.beginPath(); c.arc(x, y, r, 0, TAU); c.stroke(); }
+// tank aim: a ring of segments that fills while the gun reloads, cross with a gap, centre ring, range chevrons
+function tankReticle(c, x, y, k, col, big, label) {
+  const R = big ? 118 : 30, seg = big ? 60 : 30;
+  c.save(); c.shadowColor = 'rgba(0,0,0,.75)'; c.shadowBlur = 3; c.lineCap = 'butt';
+  c.lineWidth = big ? 5 : 3.2;
+  for (let i = 0; i < seg; i++) {
+    const a0 = -Math.PI / 2 + i / seg * TAU;
+    c.strokeStyle = (i + 0.5) / seg <= k ? col : 'rgba(255,255,255,.16)';
+    c.beginPath(); c.arc(x, y, R, a0, a0 + TAU / seg * 0.5); c.stroke();
+  }
+  c.strokeStyle = col; c.lineWidth = big ? 1.6 : 1.4;
+  const g0 = big ? 12 : 7, g1 = big ? R - 10 : R - 9, o0 = R + 5, o1 = R + (big ? 70 : 14);
+  c.beginPath();
+  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    c.moveTo(x + dx * o0, y + dy * o0); c.lineTo(x + dx * o1, y + dy * o1);
+    if (big || dy) { c.moveTo(x + dx * g0, y + dy * g0); c.lineTo(x + dx * g1, y + dy * g1); }
+  }
+  c.stroke();
+  c.beginPath(); c.arc(x, y, big ? 6 : 4, 0, TAU); c.stroke();
+  if (big) {
+    // range marks: chevrons along the horizontal line, a graduated arc below
+    c.lineWidth = 1.3; c.beginPath();
+    for (let i = 1; i <= 4; i++) for (const s of [-1, 1]) { const cx = x + s * (12 + i * 22); c.moveTo(cx - 4, y + 7); c.lineTo(cx, y + 2); c.lineTo(cx + 4, y + 7); }
+    const r2 = R * 0.72;
+    for (let i = 0; i <= 24; i++) { const a = Math.PI * 0.18 + i / 24 * Math.PI * 0.64, l = i % 6 === 0 ? 9 : i % 3 === 0 ? 6 : 3.5; c.moveTo(x + Math.cos(a) * r2, y + Math.sin(a) * r2); c.lineTo(x + Math.cos(a) * (r2 + l), y + Math.sin(a) * (r2 + l)); }
+    c.stroke();
+  }
+  c.shadowBlur = 0;
+  c.font = (big ? '800 12px' : '800 10px') + ' Unbounded'; c.textAlign = 'center'; c.fillStyle = col;
+  if (big) { c.textAlign = 'left'; c.fillText(k >= 1 ? '100%' : Math.round(k * 100) + '%', x + R * 0.74 + 6, y - R * 0.74 - 4); c.textAlign = 'center'; }
+  else c.fillText(k >= 1 ? '100%' : Math.round(k * 100) + '%', x, y - R - 19);
+  if (label) { c.fillStyle = '#f3f1e8'; c.font = '700 ' + (big ? 11 : 9) + 'px Unbounded'; c.fillText(label, x, y + R + (big ? 22 : 16)); }
+  c.restore();
+}
 function drawHud(now, dt) {
   const w = innerWidth, h = innerHeight, c = hctx;
   c.clearRect(0, 0, w, h);
@@ -5241,9 +5325,10 @@ function drawHud(now, dt) {
     if (sniper && v.type === 'tank') {   // scope
       const r = Math.min(w, h) * 0.46;
       c.fillStyle = 'rgba(0,0,0,.84)'; c.beginPath(); c.rect(0, 0, w, h); c.arc(w / 2, h / 2, r, 0, TAU, true); c.fill('evenodd');
-      c.strokeStyle = 'rgba(0,0,0,.75)'; c.lineWidth = 1.2; c.beginPath();
-      c.moveTo(w / 2 - r, h / 2); c.lineTo(w / 2 - 30, h / 2); c.moveTo(w / 2 + 30, h / 2); c.lineTo(w / 2 + r, h / 2); c.moveTo(w / 2, h / 2 + 30); c.lineTo(w / 2, h / 2 + r); c.stroke();
-      for (let i = 1; i < 6; i++) { c.beginPath(); c.moveTo(w / 2 - 6, h / 2 + 30 + i * 22); c.lineTo(w / 2 + 6, h / 2 + 30 + i * 22); c.stroke(); }
+      // the lens edge: a dark rim, and the long hairlines out to it
+      c.strokeStyle = 'rgba(0,0,0,.9)'; c.lineWidth = 6; c.beginPath(); c.arc(w / 2, h / 2, r, 0, TAU); c.stroke();
+      c.strokeStyle = 'rgba(0,0,0,.6)'; c.lineWidth = 1.2; c.beginPath();
+      c.moveTo(w / 2 - r, h / 2); c.lineTo(w / 2 - 190, h / 2); c.moveTo(w / 2 + 190, h / 2); c.lineTo(w / 2 + r, h / 2); c.moveTo(w / 2, h / 2 + 190); c.lineTo(w / 2, h / 2 + r); c.moveTo(w / 2, h / 2 - 190); c.lineTo(w / 2, h / 2 - r); c.stroke();
       c.fillStyle = 'rgba(243,241,232,.75)'; c.font = '700 9px Unbounded'; c.textAlign = 'center'; c.fillText('ПРИЦЕЛ · Shift / ПКМ / колесо вниз — выйти', w / 2, h / 2 + r + 18);
     }
     const tp = v.type === 'ship' ? v.pos.clone().setY(8) : v.pos.clone().setY(v.pos.y + 2.4);
@@ -5253,9 +5338,13 @@ function drawHud(now, dt) {
     const p = project(v.type === 'tank' && gunMarker ? gunMarker : gp);
     if (p) {
       const col = onEnemy ? '#ff5a46' : light ? '#f3f1e8' : ready ? '#9bdc6a' : '#e3a53c';
-      ring(c, p[0], p[1], light ? 9 : 14, col);
-      if (!light && !ready) { const tot = v.type === 'tank' ? 4 : 5; c.lineWidth = 3; c.strokeStyle = '#e3a53c'; c.beginPath(); c.arc(p[0], p[1], 20, -Math.PI / 2, -Math.PI / 2 + TAU * (1 - reload / tot)); c.stroke(); }
-      if (onEnemy) { c.fillStyle = '#ff5a46'; c.font = '800 11px Unbounded'; c.textAlign = 'center'; c.fillText(vName(onEnemy).toUpperCase() + ' · ' + Math.round(onEnemy.pos.distanceTo(v.pos)) + ' м', p[0], p[1] - 26); }
+      if (v.type === 'tank') {
+        const tk = Math.max(0, Math.min(1, 1 - reload / 4));
+        const rcol = onEnemy ? '#ff5a46' : ready ? '#5fe07a' : '#e3a53c';
+        tankReticle(c, p[0], p[1], tk, rcol, sniper, Math.round(dist) + ' м');
+      } else ring(c, p[0], p[1], light ? 9 : 14, col);
+      if (!light && !ready && v.type !== 'tank') { const tot = v.type === 'tank' ? 4 : 5; c.lineWidth = 3; c.strokeStyle = '#e3a53c'; c.beginPath(); c.arc(p[0], p[1], 20, -Math.PI / 2, -Math.PI / 2 + TAU * (1 - reload / tot)); c.stroke(); }
+      if (onEnemy) { c.fillStyle = '#ff5a46'; c.font = '800 11px Unbounded'; c.textAlign = 'center'; c.fillText(vName(onEnemy).toUpperCase() + ' · ' + Math.round(onEnemy.pos.distanceTo(v.pos)) + ' м', p[0], p[1] - (v.type === 'tank' ? (sniper ? 150 : 56) : 26)); }
       else if (v.type !== 'tank' && aimHit && aimHit.kind === 'veh' && aimHit.v.team !== v.team) { c.fillStyle = '#ff5a46'; c.font = '800 11px Unbounded'; c.textAlign = 'center'; c.fillText(vName(aimHit.v).toUpperCase() + ' · ' + Math.round(aimHit.t) + ' м', p[0], p[1] - 24); }
     }
     if (v.type === 'ship') {   // rocket target
@@ -5264,6 +5353,7 @@ function drawHud(now, dt) {
       if (pr) { c.strokeStyle = reload2 <= 0 ? '#ffb03a' : 'rgba(255,176,58,.35)'; c.lineWidth = 1.5; c.beginPath(); c.moveTo(pr[0] - 18, pr[1]); c.lineTo(pr[0] + 18, pr[1]); c.moveTo(pr[0], pr[1] - 18); c.lineTo(pr[0], pr[1] + 18); c.stroke(); }
     }
   }
+  if (!sniper) drawOrderRoutes(c, true);
   drawThreats(c, w, h, dt);
   if (!locked) { c.font = '700 12px Unbounded'; c.textAlign = 'center'; c.fillStyle = 'rgba(0,0,0,.55)'; c.fillRect(w / 2 - 170, h * 0.66 - 20, 340, 32); c.fillStyle = '#e3a53c'; c.fillText('КЛИКНИТЕ, ЧТОБЫ УПРАВЛЯТЬ', w / 2, h * 0.66); }
   if (now < matchStartAt) centerMsg(String(Math.ceil((matchStartAt - now) / 1000)), 'К БОЮ', 400);
@@ -5480,10 +5570,12 @@ function drawMinimap() {
     else { c.beginPath(); c.moveTo(0, -5); c.lineTo(4, 0); c.lineTo(0, 5); c.lineTo(-4, 0); c.closePath(); c.fill(); }
     if (v.vid === myVid) { c.strokeStyle = '#111'; c.lineWidth = 1.5; c.stroke(); }
     c.restore();
+    if (v.attackedAt && performance.now() - v.attackedAt < 4000 && v.team === team) { const k = ((performance.now() - v.attackedAt) / 700) % 1; c.strokeStyle = `rgba(255,70,50,${1 - k})`; c.lineWidth = 2; c.beginPath(); c.arc(x, y, 5 + k * 12, 0, TAU); c.stroke(); }
   }
   for (const s of shots) if (s.k === 'icbm') { const [x, y] = mmP(s.target.x, s.target.z), [mx, my] = mmP(s.pos.x, s.pos.z); const pr = 8 + (performance.now() / 120) % 14;
     c.strokeStyle = '#ff3a26'; c.lineWidth = 3; c.beginPath(); c.arc(x, y, pr, 0, TAU); c.stroke(); c.fillStyle = '#ff3a26'; c.beginPath(); c.arc(x, y, 4, 0, TAU); c.fill(); c.fillStyle = '#fff'; c.fillRect(mx - 3, my - 3, 6, 6); }
   const tv = myVehicle(); if (tv && tv.tmode) { const [x, y] = mmP(tv.tgt.x, tv.tgt.z); c.strokeStyle = '#ffb03a'; c.lineWidth = 2; c.beginPath(); c.moveTo(x - 9, y); c.lineTo(x + 9, y); c.moveTo(x, y - 9); c.lineTo(x, y + 9); c.stroke(); }
+  drawOrderRoutesMini(c);
   // where my autopilot cars are heading
   for (const o of vehicles.values()) if (isAuto(o) && o.ai && o.ai.dest) {
     const [x, y] = mmP(o.ai.dest.x, o.ai.dest.z), [ox, oy] = mmP(o.pos.x, o.pos.z);
@@ -5622,9 +5714,23 @@ socket.on('dmg', d => {
     shake = Math.max(shake, d.dmg > 10 ? 0.8 : 0.2);
     if (d.dmg > 4) { audio.play('hit', 0.9, 0, 0.8); const f = $('flash'); f.style.transition = 'none'; f.style.boxShadow = 'inset 0 0 160px rgba(220,40,30,.55)'; requestAnimationFrame(() => { f.style.transition = 'box-shadow .5s'; f.style.boxShadow = 'inset 0 0 160px rgba(220,40,30,0)'; }); }
   }
+  if (v.team === myTeam() && d.vid !== myVid && !v.driver && d.dmg > 0 && v.type !== 'gunner') {
+    const sh = d.by && room && room.players.find(q => q.id === d.by);
+    if (!sh || sh.team !== v.team) { const a = ownAcc.get(d.vid) || { n: 0, t: performance.now() }; a.n += d.dmg; ownAcc.set(d.vid, a); }
+  }
   if (d.by === myId) { const a = dmgAcc.get(d.vid) || { n: 0, pt, t: performance.now() }; a.n += d.dmg; a.pt = pt; dmgAcc.set(d.vid, a); }
 });
+const ownAcc = new Map();
+let ownAlarmT = 0;
 function flushDamage(now) {
+  for (const [vid, a] of ownAcc) {
+    if (now - a.t < 900) continue;
+    const v = vehicles.get(vid); ownAcc.delete(vid);
+    if (!v) continue;
+    logMsg(`<span style="color:#ff5a46;font-weight:800">⚠ АТАКУЮТ</span> <b>${vName(v)}</b> <span style="color:#ffcf6a">−${a.n}</span> <span style="color:var(--dim)">${Math.max(0, Math.round(v.hp))} HP</span>`);
+    if (now - ownAlarmT > 6000) { ownAlarmT = now; audio.play('hit', 0.35, 0, 1.4); }
+    v.attackedAt = now;
+  }
   for (const [vid, a] of dmgAcc) {
     if (now - a.t < 300) continue;
     const v = vehicles.get(vid);
