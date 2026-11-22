@@ -57,14 +57,21 @@ function cleanName(n) {
   n = String(n || '').replace(/[<>]/g, '').trim().slice(0, 14);
   return n || 'Боец' + Math.floor(Math.random() * 90 + 10);
 }
-function makeVehicles() {
+// Ледяной остров: the blue airfield is on the south side of its base and its harbour further south
+function iceBlueSpot(type, x, z) {
+  if (type === 'plane') return 120 - z;
+  if (type === 'ship') return z + 260;
+  if (type === 'gunner' && z > 300) return 490;          // the coastal gun, clear of the runway
+  return z;
+}
+function makeVehicles(map) {
   const vs = [];
   for (const team of [0, 1]) {
     const count = {};
     for (const [type, x, z, yaw, skin] of LAYOUT) {
       const ck = skin || type;
       count[ck] = (count[ck] || 0) + 1;
-      const sp = team === 0 ? { x, z, yaw } : { x: -x, z, yaw: -yaw };
+      const sp = team === 0 ? { x, z, yaw } : { x: -x, z: map === 'ice' ? iceBlueSpot(type, x, z) : z, yaw: -yaw };
       vs.push({ vid: `${team}${skin ? 'l' : PFX[type] || type[0]}${count[ck]}`, team, type, skin: skin || null, n: count[ck], hp: HP[type], max: HP[type], alive: true, driver: null, ammo: type === 'icbm' ? 2 : 0, spent: false, spawn: sp, st: null, respawnAt: 0, lastHitBy: null, lastHitAt: 0 });
     }
   }
@@ -129,7 +136,7 @@ function startMatch(r) {
   r.state = 'playing';
   r.seed = Math.floor(Math.random() * 1e9);
   r.tickets = [MACHINES, MACHINES];
-  r.vehicles = makeVehicles();
+  r.vehicles = makeVehicles(r.map);
   r.hangars = makeHangars();
   for (const p of r.players.values()) { p.kills = 0; p.deaths = 0; p.dmg = 0; p.vid = null; }
   r.endsAt = Date.now() + 3000 + MATCH_TIME * 1000;
@@ -247,7 +254,7 @@ io.on('connection', socket => {
   // the host picks the map in the lobby
   socket.on('setMap', m => {
     if (!room || room.hostId !== socket.id || room.state === 'playing' || !MAPS.includes(m)) return;
-    room.map = m; broadcastRoom(room);
+    room.map = m; room.vehicles = makeVehicles(m); broadcastRoom(room);
   });
   socket.on('setTeam', t => {
     if (!room || room.state === 'playing') return;
@@ -291,7 +298,8 @@ io.on('connection', socket => {
     if (!v || v.type !== 'plane' || !v.alive || v.driver !== socket.id || room.state !== 'playing' || !v.st) return;
     const bx = v.team ? 1200 : -1200;
     const x = v.st[0], z = v.st[2];
-    const home = Math.hypot(x - bx, z - 60) < 290 || (Math.abs(x) > 990 && Math.sign(x) === (v.team ? 1 : -1) && Math.abs(z + 250) < 90);   // base or its runway
+    const rz = room.map === 'ice' && v.team ? 370 : -250;
+    const home = Math.hypot(x - bx, z - 60) < 290 || (Math.abs(x) > 990 && Math.sign(x) === (v.team ? 1 : -1) && Math.abs(z - rz) < 90);   // base or its runway
     if (!home || Math.abs(v.st[6] || 0) > 2) return;
     if (now - (v.fixAt || 0) < 850) return;
     v.fixAt = now;

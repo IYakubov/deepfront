@@ -17,6 +17,11 @@ const BASE_Y = 6;
 const BASES = [{ x: -1200, z: 60 }, { x: 1200, z: 60 }];
 const BASE_R = 270;
 const RWY = { x0: 1030, x1: 1480, z: -250, w: 30 };   // |x| range, mirrored per team
+// airfield z for a team: on Ледяной остров the blue airfield is turned to the south side of its base,
+// so the canyons don't lead straight onto both runways (MAP_ID is set before anything is built)
+const afZ = (team, z) => (MAP_ID === 'ice' && team === 1 ? 120 - z : z);
+const rwyZ = team => afZ(team, RWY.z);
+const sideTeam = x => (x < 0 ? 0 : 1);
 const PORT = [{ x: -1200, z: 520 }, { x: 1200, z: 520 }];
 const SAMS = [[-1010, -110], [-1300, 330], [-1450, -60]];   // team 0, team 1 mirrored
 const HP = { tank: 120, jeep: 50, plane: 70, ship: 260, gunner: 40, icbm: 90, drone: 8, soldier: 30, moto: 35 };
@@ -139,7 +144,7 @@ function renderLobby() {
   }
   // map choice (the host picks)
   const cur = room.map || 'valley';
-  $('maps').innerHTML = MAP_LIST.map(m => `<button data-map="${m.id}" class="${m.id === cur ? 'on' : ''}" ${isHost() ? '' : 'disabled'}><img src="maps/${m.id}.jpg?v=${ASSET_V}b" alt=""><b>${m.name}</b><span>${m.desc}</span></button>`).join('');
+  $('maps').innerHTML = MAP_LIST.map(m => `<button data-map="${m.id}" class="${m.id === cur ? 'on' : ''}" ${isHost() ? '' : 'disabled'}><img src="maps/${m.id}.jpg?v=${ASSET_V}c" alt=""><b>${m.name}</b><span>${m.desc}</span></button>`).join('');
   $('maps').querySelectorAll('button').forEach(b => b.onclick = () => { if (isHost() && b.dataset.map !== cur) socket.emit('setMap', b.dataset.map); });
   $('startBtn').disabled = !isHost();
   $('startBtn').textContent = isHost() ? (room.players.length < 2 ? 'Начать (тренировка)' : 'Начать бой') : 'Ожидание хоста…';
@@ -562,7 +567,8 @@ function iceGrid() {
     const wob = (fbm(n2, x * 0.004, z * 0.004, 3) - .5) * 110;
     const Ri = Math.pow(ax / 1570, 2.6) + Math.pow(Math.abs(z - 10) / 1075, 2.2);
     let dc = (1 - Ri) * 430 + wob * (Math.hypot(ax - 1200, z - 60) < 420 ? 0.15 : 1);
-    dc = Math.min(dc, (Math.hypot(ax - 1215 + (z - 660) * 0.25, (z - 660) / 1.25) - 190 + wob * 0.6) * 1.4);
+    const bz = x < 0 ? 660 : 820;                // the blue harbour sits further south, below its airfield
+    dc = Math.min(dc, (Math.hypot(ax - 1215 + (z - bz) * 0.25, (z - bz) / 1.25) - 190 + wob * 0.6) * 1.4);
     let h = 7 + fbm(n2, x * 0.003 + 5, z * 0.003, 4) * 22;
     // mountains: ridged fractal inside the range masks
     let mask = 0;
@@ -579,8 +585,9 @@ function iceGrid() {
     // flat bases and runways (same as the first map)
     let flat = 0;
     for (const b of BASES) flat = Math.max(flat, 1 - smooth(BASE_R + 50, BASE_R + 190, Math.hypot(x - b.x, z - b.z)));
-    if (ax > RWY.x0 - 60 && ax < RWY.x1 + 60) flat = Math.max(flat, 1 - smooth(RWY.w, RWY.w + 70, Math.abs(z - RWY.z)));
+    if (ax > RWY.x0 - 60 && ax < RWY.x1 + 60) flat = Math.max(flat, 1 - smooth(RWY.w + 50, RWY.w + 120, Math.abs(z - (x < 0 ? RWY.z : 120 - RWY.z))));    // runway + hangars
     h = lerp(h, BASE_Y, flat);
+    if (flat > 0.3) dc = Math.max(dc, 70 * flat);      // the runways never run into the sea
     // coast and sea
     if (dc < 60) h = lerp(h, 1.2, smooth(60, 0, dc));
     if (dc < 0) h = Math.max(-26, 1.2 + dc * 0.17);
@@ -633,7 +640,7 @@ let roadZ = VALLEY_ROAD;
 // fixed town sites (the terrain is flattened under them; the same every match)
 const TOWN_PADS = TOWN_PADS_INIT();
 const inPad = (x, z, m = 0) => TOWN_PADS.some(p => Math.abs(x - p.x) < p.hx + m && Math.abs(z - p.z) < p.hz + m);
-const onBasePad = (x, z) => BASES.some(b => Math.hypot(x - b.x, z - b.z) < BASE_R + 15) || (Math.abs(x) > RWY.x0 - 50 && Math.abs(z - RWY.z) < RWY.w + 25);
+const onBasePad = (x, z) => BASES.some(b => Math.hypot(x - b.x, z - b.z) < BASE_R + 15) || (Math.abs(x) > RWY.x0 - 50 && Math.abs(z - rwyZ(sideTeam(x))) < RWY.w + 25);
 
 function buildWorld(seed) {
   if (world) { scene.remove(world.group); world.group.traverse(o => { if (o.geometry) o.geometry.dispose(); }); }
@@ -773,18 +780,18 @@ function buildWorld(seed) {
     // runway
     const rl = RWY.x1 - RWY.x0 + 40;
     const rw = new THREE.Mesh(new THREE.PlaneGeometry(RWY.w * 2, rl), new THREE.MeshStandardMaterial({ map: rwTex, roughness: .95, polygonOffset: true, polygonOffsetFactor: -2 }));
-    rw.rotation.set(-Math.PI / 2, 0, Math.PI / 2); rw.position.set(teamX(team, (RWY.x0 + RWY.x1) / 2), BASE_Y + 0.05, RWY.z); rw.receiveShadow = true; group.add(rw);
+    rw.rotation.set(-Math.PI / 2, 0, Math.PI / 2); rw.position.set(teamX(team, -(RWY.x0 + RWY.x1) / 2), BASE_Y + 0.05, rwyZ(team)); rw.receiveShadow = true; group.add(rw);
     // taxiway to the base
     const tw = new THREE.Mesh(new THREE.PlaneGeometry(18, 200), new THREE.MeshStandardMaterial({ color: 0x55585a, roughness: .95, polygonOffset: true, polygonOffsetFactor: -2 }));
-    tw.rotation.x = -Math.PI / 2; tw.position.set(bx - sx * 60, BASE_Y + 0.04, -130); tw.receiveShadow = true; group.add(tw);
+    tw.rotation.x = -Math.PI / 2; tw.position.set(bx - sx * 60, BASE_Y + 0.04, afZ(team, -130)); tw.receiveShadow = true; group.add(tw);
     // hangars (open towards the runway)
     for (const hx of [-1330, -1210]) {
-      const x = teamX(team, hx), z = -330;
+      const x = teamX(team, hx), z = afZ(team, -330);
       const hg = mk(new THREE.CylinderGeometry(20, 20, 40, 14, 1, true, 0, Math.PI), M(0x80878a, { metalness: .4, roughness: .55, side: THREE.DoubleSide }), x, BASE_Y, z); hg.rotation.set(0, 0, Math.PI / 2);
       addBox(x, z - 19, 20, 1.5, BASE_Y + 14); addBox(x, z + 19, 20, 1.5, BASE_Y + 14);
     }
     // control tower
-    const tx = teamX(team, -1270), tz = -180;
+    const tx = teamX(team, -1270), tz = afZ(team, -180);
     block(tx, tz, 8, 18, 8, mConc, BASE_Y);
     mk(new THREE.BoxGeometry(11, 4, 11), mGlass, tx, BASE_Y + 20, tz);
     mk(new THREE.BoxGeometry(12, 0.8, 12), mDark, tx, BASE_Y + 22.4, tz);
@@ -850,16 +857,16 @@ function buildWorld(seed) {
     for (let i = 0; i < 10; i++) PR.barrel.push([bx - sx * (2 + rand() * 6), BASE_Y + 0.6, bz + 118 + rand() * 6, 0, 1]);
     addBox(bx - sx * 5, bz + 121, 4, 4, BASE_Y + 1.3);
     for (let i = 0; i < 5; i++) { mk(tentGeo, M(0x6f7350), bx - sx * (112 + i * 9), BASE_Y, bz - 120); addBox(bx - sx * (112 + i * 9), bz - 120, 3, 3.5, BASE_Y + 2.4); }
-    for (let z = -30; z >= -190; z -= 40) { PR.lamp.push([bx - sx * 60 + 11, BASE_Y + 3.5, z, 0, 1]); PR.bulb.push([bx - sx * 60 + 11, BASE_Y + 7.1, z, 0, 1]); }
+    for (let z0 = -30; z0 >= -190; z0 -= 40) { const z = afZ(team, z0); PR.lamp.push([bx - sx * 60 + 11, BASE_Y + 3.5, z, 0, 1]); PR.bulb.push([bx - sx * 60 + 11, BASE_Y + 7.1, z, 0, 1]); }
     for (const [ox, oz] of [[60, 0], [60, 120], [-30, 60], [-110, 30]]) { PR.lamp.push([bx + sx * ox, BASE_Y + 3.5, bz + oz, 0, 1]); PR.bulb.push([bx + sx * ox, BASE_Y + 7.1, bz + oz, 0, 1]); }
-    for (let x = RWY.x0 - 15; x <= RWY.x1 + 15; x += 22) for (const dz of [-RWY.w - 1.5, RWY.w + 1.5]) PR.rl.push([teamX(team, x), BASE_Y + 0.3, RWY.z + dz, 0, 1]);
+    for (let x = RWY.x0 - 15; x <= RWY.x1 + 15; x += 22) for (const dz of [-RWY.w - 1.5, RWY.w + 1.5]) PR.rl.push([teamX(team, -x), BASE_Y + 0.3, rwyZ(team) + dz, 0, 1]);
     mk(new THREE.CylinderGeometry(0.22, 0.4, 34, 6), mMetal, bx - sx * 100, BASE_Y + 17, bz - 78);        // radio mast
     for (let k = 1; k <= 3; k++) mk(new THREE.BoxGeometry(2.4, 0.12, 0.12), mMetal, bx - sx * 100, BASE_Y + 8 + k * 7, bz - 78);
     mk(new THREE.SphereGeometry(0.4, 6, 4), new THREE.MeshBasicMaterial({ color: 0xff3020 }), bx - sx * 100, BASE_Y + 34.3, bz - 78);
     // windsock, fuel truck by the runway
-    mk(new THREE.CylinderGeometry(0.08, 0.08, 6, 5), mMetal, teamX(team, -1050), BASE_Y + 3, RWY.z + 45);
-    const sock = mk(new THREE.ConeGeometry(0.5, 2.4, 8), new THREE.MeshStandardMaterial({ color: 0xe8642a, roughness: .9 }), teamX(team, -1050) + 1.2, BASE_Y + 5.8, RWY.z + 45); sock.rotation.z = -Math.PI / 2;
-    { const fx = teamX(team, -1290), fz = -205;
+    mk(new THREE.CylinderGeometry(0.08, 0.08, 6, 5), mMetal, teamX(team, -1050), BASE_Y + 3, afZ(team, RWY.z + 45));
+    const sock = mk(new THREE.ConeGeometry(0.5, 2.4, 8), new THREE.MeshStandardMaterial({ color: 0xe8642a, roughness: .9 }), teamX(team, -1050) + 1.2, BASE_Y + 5.8, afZ(team, RWY.z + 45)); sock.rotation.z = -Math.PI / 2;
+    { const fx = teamX(team, -1290), fz = afZ(team, -205);
       mk(new THREE.BoxGeometry(2.4, 1.0, 7), mDark, fx, BASE_Y + 0.9, fz); mk(new THREE.BoxGeometry(2.3, 1.8, 2), M(0x5d6640), fx, BASE_Y + 2.1, fz + 2.4);
       const tk = mk(new THREE.CylinderGeometry(1.1, 1.1, 4.4, 10), mWhite, fx, BASE_Y + 2.4, fz - 1.1); tk.rotation.x = Math.PI / 2; addBox(fx, fz, 1.5, 3.8, BASE_Y + 3.4); }
     // lighthouse at the port
@@ -903,7 +910,7 @@ function buildWorld(seed) {
     if (ICEMAP && (Math.abs(H(x + 6, z) - y) > 5 || Math.abs(H(x, z + 6) - y) > 5 || nearIceRoad(x, z, 12))) continue;
     if (BASES.some(b => Math.hypot(x - b.x, z - b.z) < BASE_R + 90)) continue;
     if (Math.abs(x) < 1020 && Math.abs(z - roadZ(x)) < 11) continue;
-    if (Math.abs(x) > RWY.x0 - 80 && Math.abs(z - RWY.z) < 110) continue;
+    if (Math.abs(x) > RWY.x0 - 80 && Math.abs(z - rwyZ(sideTeam(x))) < 110) continue;
     if (boxes.some(b => Math.abs(b.x - x) < b.hx + 4 && Math.abs(b.z - z) < b.hz + 4) || inPad(x, z, 12)) continue;
     trees.push({ x, y, z, s: 0.8 + rand() * 0.8, r: rand() * TAU });
   }
@@ -2575,8 +2582,9 @@ function setupTowns(group, seed) {
       const B = BASES[team], keep = [];
       const sp = SPAWN_PTS.map(([x, z]) => [teamX(team, x), z]);
       const corridors = [
-        [-1500, -1000, RWY.z - 75, RWY.z + 75],      // runway and hangars side
-        [-1295, -1225, -250, 10],                     // taxiway
+        [-1500, -1000, rwyZ(team) - 75, rwyZ(team) + 75],      // runway and hangars side
+        [-1500, -1000, afZ(team, -330) - 30, afZ(team, -330) + 30],
+        [-1295, -1225, Math.min(afZ(team, -250), afZ(team, 10)), Math.max(afZ(team, -250), afZ(team, 10))],   // taxiway
         [-1190, -880, -45, 240],                      // tanks / jeeps / drones drive out this way
         [-1245, -1150, 190, 470],                     // road down to the port
         [-1300, -1150, -115, -30],                    // way into the repair hangar
@@ -3376,7 +3384,7 @@ function inOwnBase(v) {
   if (v.type === 'ship') return Math.hypot(v.pos.x - PORT[v.team].x, v.pos.z - PORT[v.team].z) < 220;
   if (v.type === 'plane' && v.air) return false;
   const b = BASES[v.team];
-  return Math.hypot(v.pos.x - b.x, v.pos.z - b.z) < BASE_R || (Math.abs(v.pos.x) > RWY.x0 - 40 && Math.sign(v.pos.x) === (v.team ? 1 : -1) && Math.abs(v.pos.z - RWY.z) < 80);
+  return Math.hypot(v.pos.x - b.x, v.pos.z - b.z) < BASE_R || (Math.abs(v.pos.x) > RWY.x0 - 40 && Math.sign(v.pos.x) === (v.team ? 1 : -1) && Math.abs(v.pos.z - rwyZ(v.team)) < 80);
 }
 // where the camera is looking: the point the weapons aim at
 function updateAim(v) {
@@ -4745,7 +4753,7 @@ function buildMinimapBase() {
   for (const team of [0, 1]) {
     const [bx, by] = mmP(BASES[team].x, BASES[team].z);
     c.strokeStyle = TEAM_CSS[team]; c.lineWidth = 2; c.beginPath(); c.arc(bx, by, BASE_R / (2 * MMX) * MMW, 0, TAU); c.stroke();
-    const [r0x, ry] = mmP(teamX(team, RWY.x0), RWY.z), [r1x] = mmP(teamX(team, RWY.x1), RWY.z);
+    const [r0x, ry] = mmP(teamX(team, -RWY.x0), rwyZ(team)), [r1x] = mmP(teamX(team, -RWY.x1), rwyZ(team));
     c.strokeStyle = '#3a3c3d'; c.lineWidth = 4; c.beginPath(); c.moveTo(r0x, ry); c.lineTo(r1x, ry); c.stroke();
   }
 }
