@@ -2018,8 +2018,9 @@ function splitMesh(mesh, keyOf) {
   const n = idx ? idx.count : pos.count, gi = i => idx ? idx.getX(i) : i;
   for (let i = 0; i < n; i += 3) {
     a.fromBufferAttribute(pos, gi(i)); b.fromBufferAttribute(pos, gi(i + 1)); c.fromBufferAttribute(pos, gi(i + 2));
-    a.add(b).add(c).multiplyScalar(1 / 3).applyMatrix4(mesh.matrixWorld);
-    const k = keyOf(a); if (!buckets.has(k)) buckets.set(k, []);
+    let k;
+    if (keyOf.length > 1) { const t = [a, b, c].map(q => q.clone().applyMatrix4(mesh.matrixWorld)); k = keyOf(t[0].clone().add(t[1]).add(t[2]).multiplyScalar(1 / 3), t); }
+    else { a.add(b).add(c).multiplyScalar(1 / 3).applyMatrix4(mesh.matrixWorld); k = keyOf(a); } if (!buckets.has(k)) buckets.set(k, []);
     buckets.get(k).push(gi(i), gi(i + 1), gi(i + 2));
   }
   const out = {};
@@ -2505,13 +2506,21 @@ const DRESS = {
 // the bike: front towards +z, origin on the ground under its middle
 const HARLEY = {
   S: 2.05,                                   // the scan is 1.14 m long; a Fatboy is about 2.35 m
-  FW: [0.84, 0.335], RW: [-0.82, 0.335],     // wheel centres (z, y) once scaled and fitted
+  FW: [0.84, 0.335], RW: [-0.82, 0.335], WR: 0.362,     // wheel centres (z, y) once scaled and fitted
   HIP: [0, 0.86, -0.3],
   GRIP_L: [0.36, 1.17, 0.18],
   ARC: 1.9,                                  // how far round (each side) he can swing the shotgun
   N: 11,                                     // arm poses sampled across that arc
   SPIN: 0.72, RELOAD: 1.05,                  // spin-cock time, then a beat to aim again
 };
+// which wheel a triangle belongs to: every corner inside the tyre's circle and between its sidewalls
+// (fenders, the exhaust, belt and swingarm pass close to the wheels but stick out of that disc)
+function harleyWheelOf(c, tri) {
+  for (const [k, W, half] of [['fw', HARLEY.FW, 0.085], ['rw', HARLEY.RW, 0.115]]) {
+    if (tri.every(p => Math.abs(p.x) < half && Math.hypot(p.z - W[0], p.y - W[1]) < HARLEY.WR)) return k;
+  }
+  return 'body';
+}
 // two-bone IK at dress time (the vehicle sits at the origin, so world space == vehicle space)
 function ik2(b1, b2, b3, T, pole) {
   if (!b1 || !b2 || !b3) return;
@@ -2545,8 +2554,7 @@ DRESS.harley = function (v, col) {
   // wheels: cut them out of the single mesh so they can roll
   const parts = { fw: [], rw: [] }, meshes = []; holder.traverse(o => { if (o.isMesh) meshes.push(o); });
   for (const m of meshes) {
-    const sp = splitMesh(m, p => Math.abs(p.x) < 0.1 && Math.hypot(p.z - HARLEY.FW[0], p.y - HARLEY.FW[1]) < 0.36 ? 'fw'
-      : Math.abs(p.x) < 0.14 && Math.hypot(p.z - HARLEY.RW[0], p.y - HARLEY.RW[1]) < 0.36 ? 'rw' : 'body');
+    const sp = splitMesh(m, harleyWheelOf);
     for (const k in parts) if (sp[k]) parts[k].push(sp[k]);
   }
   const fw = pivotAt(lean, new THREE.Vector3(0, HARLEY.FW[1], HARLEY.FW[0]), ...parts.fw);
@@ -2592,16 +2600,21 @@ DRESS.harley = function (v, col) {
     // a full-face helmet with a dark visor, on the head bone
     if (head) {
       const hm = new THREE.Group();
-      const shell = new THREE.Mesh(new THREE.SphereGeometry(0.15, 18, 12), new THREE.MeshStandardMaterial({ color: col, roughness: 0.25, metalness: 0.4 }));
-      shell.scale.set(1, 1.05, 1.12);
-      const visor = new THREE.Mesh(new THREE.SphereGeometry(0.152, 16, 8, Math.PI / 2 - 1.05, 2.1, 1.15, 0.75), new THREE.MeshStandardMaterial({ color: 0x0c0d10, roughness: 0.08, metalness: 0.8 }));
-      visor.scale.copy(shell.scale);
-      hm.add(shell, visor);
-      shell.material.userData = { real: true, base: shell.material.color.clone() }; v.mats.push(shell.material);
+      const M = (c, r, m) => new THREE.MeshStandardMaterial({ color: c, roughness: r, metalness: m });
+      const shellM = M(0x17181a, 0.3, 0.35), visM = M(0x0a0b0d, 0.06, 0.85), stripeM = M(col, 0.35, 0.3);
+      const shell = new THREE.Mesh(new THREE.SphereGeometry(0.135, 20, 14), shellM); shell.scale.set(0.94, 0.98, 1.12);
+      // chin guard and the lower back edge: a full-face helmet, not a ball
+      const chin = new THREE.Mesh(new THREE.SphereGeometry(0.11, 16, 10, Math.PI / 2 - 1.1, 2.2, 1.5, 1.0), shellM); chin.scale.set(1, 0.95, 1.05); chin.position.set(0, -0.045, 0.035);
+      const visor = new THREE.Mesh(new THREE.SphereGeometry(0.139, 18, 8, Math.PI / 2 - 0.95, 1.9, 1.2, 0.5), visM); visor.scale.copy(shell.scale);
+      const stripe = new THREE.Mesh(new THREE.TorusGeometry(0.137, 0.012, 6, 28, Math.PI * 1.15), stripeM); stripe.rotation.set(0, Math.PI / 2, Math.PI * -0.075); stripe.scale.set(0.98, 1, 1.12);
+      const peak = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.012, 0.05), shellM); peak.position.set(0, 0.085, 0.13); peak.rotation.x = -0.25;
+      hm.add(shell, chin, visor, stripe, peak);
+      stripeM.userData = { real: true, base: stripeM.color.clone() }; v.mats.push(stripeM);
       s.updateMatrixWorld(true);
-      const hw = head.getWorldPosition(new THREE.Vector3());
-      lean.add(hm); hm.position.copy(lean.worldToLocal(hw.add(V(0, 0.1, 0.02))));
-      lean.updateMatrixWorld(true); head.attach(hm);
+      const hw = head.getWorldPosition(new THREE.Vector3()); hm.scale.setScalar(1.08);
+      lean.add(hm); hm.position.copy(lean.worldToLocal(hw.add(V(0, 0.09, 0.02))));
+      head.scale.setScalar(0.72);                           // his own head (and army helmet) shrinks inside the new one
+      lean.updateMatrixWorld(true); (head.parent || head).attach(hm);
     }
   }
   // the shotgun: pivot in his right hand (turns with the aim), spin group inside for the reload
