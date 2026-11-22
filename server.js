@@ -28,6 +28,7 @@ const HP = { tank: 120, jeep: 50, plane: 70, ship: 260, gunner: 40, icbm: 90, dr
 const MACHINES = 15;             // per team; machine-gun posts, drones and foot soldiers don't count
 const NOT_MACHINE = new Set(['gunner', 'drone', 'soldier']);
 const PFX = { soldier: 'a' };     // vid prefix (ship already uses 's')
+const SKIN_HP = { harley: 45 };   // the Harley survives one shotgun blast (a moto takes 35)
 // repair hangar per base (team 0; team 1 mirrored in x): one machine at a time, 60 s, can be destroyed
 const HANGAR = { x: -1195, z: -75, hx: 18, hz: 15, hp: 120 };   // as tough as a tank
 const REPAIR_T = 60;
@@ -42,6 +43,7 @@ const LAYOUT = [
   ['ship', -1260, 560, 0.25], ['ship', -1150, 590, 0.25],
   ['drone', -1185, 14, Math.PI / 2], ['drone', -1185, 22, Math.PI / 2],
   ['moto', -1235, 75, Math.PI / 2], ['moto', -1235, 90, Math.PI / 2],
+  ['moto', -1235, 105, Math.PI / 2, 'harley'],          // the biker on the Harley with a pump shotgun (no sidecar)
   ['gunner', -985, 40, Math.PI / 2], ['gunner', -1010, 215, Math.PI / 2], ['gunner', -1150, 405, 0],
 ];
 
@@ -73,7 +75,7 @@ function makeVehicles(map) {
       const ck = skin || type;
       count[ck] = (count[ck] || 0) + 1;
       const sp = team === 0 ? { x, z, yaw } : { x: -x, z: map === 'ice' || map === 'storm' ? iceBlueSpot(type, x, z) : z, yaw: -yaw };
-      vs.push({ vid: `${team}${skin ? 'l' : PFX[type] || type[0]}${count[ck]}`, team, type, skin: skin || null, n: count[ck], hp: HP[type], max: HP[type], alive: true, driver: null, ammo: type === 'icbm' ? 2 : 0, spent: false, spawn: sp, st: null, respawnAt: 0, lastHitBy: null, lastHitAt: 0 });
+      vs.push({ vid: `${team}${skin === 'harley' ? 'h' : skin ? 'l' : PFX[type] || type[0]}${count[ck]}`, team, type, skin: skin || null, n: count[ck], hp: SKIN_HP[skin] || HP[type], max: SKIN_HP[skin] || HP[type], alive: true, driver: null, ammo: type === 'icbm' ? 2 : 0, spent: false, spawn: sp, st: null, respawnAt: 0, lastHitBy: null, lastHitAt: 0 });
     }
   }
   return vs;
@@ -284,7 +286,7 @@ io.on('connection', socket => {
     let seat = 0;
     if (v.driver && v.driver !== p.id) {
       // a motorcycle has a second seat: the machine-gunner in the sidecar
-      if (v.type !== 'moto' || (v.gunner && v.gunner !== p.id)) return cb && cb({ ok: false, err: 'Занято' });
+      if (v.type !== 'moto' || v.skin === 'harley' || (v.gunner && v.gunner !== p.id)) return cb && cb({ ok: false, err: 'Занято' });
       seat = 1;
     }
     const old = myVehicle(); if (old && old !== v) leaveSeat(old);

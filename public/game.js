@@ -26,13 +26,13 @@ const PORT = [{ x: -1200, z: 520 }, { x: 1200, z: 520 }];
 const SAMS = [[-1010, -110], [-1300, 330], [-1450, -60]];   // team 0, team 1 mirrored
 const HP = { tank: 120, jeep: 50, plane: 70, ship: 260, gunner: 40, icbm: 90, drone: 8, soldier: 30, moto: 35 };
 const HANGAR = { x: -1195, z: -75, hx: 18, hz: 15 };   // repair hangar of team 0; team 1 mirrored in x
-const ASSET_V = '10';                                  // bump when models change (they are cached by the browser)
+const ASSET_V = '11';                                  // bump when models change (they are cached by the browser)
 const TYPE_NAME = { tank: 'Танк', jeep: 'Джип', plane: 'Самолёт', ship: 'Корабль', gunner: 'Пулемётчик', icbm: 'SS-27', drone: 'FPV-дрон', soldier: 'Солдат', moto: 'Мотоцикл' };
 const TYPE_ICON = { tank: '▣', jeep: '◆', plane: '✈', ship: '⛴', gunner: '☗', icbm: '⇪', drone: '✣', soldier: '✚', moto: '⚙' };
 const TEAM_COL = [0x6f7d40, 0x3f6283];
 const TEAM_CSS = ['#a9b86a', '#7fa6c9'];
 // collision / hit boxes in local space [hx, y0, y1, hz]
-const HITBOX = { tank: [1.7, 0, 2.7, 3.7], jeep: [1.35, 0.2, 2.6, 2.3], plane: [6.6, -1.2, 2.6, 9.5], ship: [3.2, -2, 10, 24], gunner: [1.7, 0, 2.2, 1.7], icbm: [2.05, 0, 4.3, 11], drone: [0.7, -0.35, 0.5, 0.7], soldier: [0.42, 0, 1.85, 0.42], moto: [1.05, 0, 1.7, 1.6], l9: [1.0, 0.15, 2.3, 2.6] };
+const HITBOX = { tank: [1.7, 0, 2.7, 3.7], jeep: [1.35, 0.2, 2.6, 2.3], plane: [6.6, -1.2, 2.6, 9.5], ship: [3.2, -2, 10, 24], gunner: [1.7, 0, 2.2, 1.7], icbm: [2.05, 0, 4.3, 11], drone: [0.7, -0.35, 0.5, 0.7], soldier: [0.42, 0, 1.85, 0.42], moto: [1.05, 0, 1.7, 1.6], harley: [0.55, 0, 1.75, 1.2], l9: [1.0, 0.15, 2.3, 2.6] };
 // damage per weapon against each vehicle type
 const DMG = {
   shell: { tank: 30, jeep: 50, plane: 45, ship: 24, gunner: 40, soldier: 60, moto: 45 },
@@ -44,6 +44,7 @@ const DMG = {
   fpv: { tank: 65, jeep: 90, plane: 90, ship: 45, gunner: 90, icbm: 90, drone: 90, soldier: 90, moto: 90 },
   bomb: { tank: 85, jeep: 90, plane: 90, ship: 90, gunner: 90, soldier: 90, moto: 90 },
   ak: { tank: 0, jeep: 2, plane: 3, ship: 0, gunner: 4, icbm: 1, drone: 8, soldier: 9, moto: 2 },
+  sg: { tank: 10, jeep: 35, plane: 10, ship: 10, gunner: 35, icbm: 10, drone: 90, soldier: 90, moto: 35 },   // the Harley's pump shotgun
   crush: { tank: 0, jeep: 0, plane: 0, ship: 0, gunner: 0, soldier: 90, moto: 0 },
 };
 
@@ -305,7 +306,7 @@ const audio = (() => {
     if (on && !rainNode) {
       const s = ctx.createBufferSource(); s.buffer = noiseBuf; s.loop = true;
       const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 2400; f.Q.value = 0.5;
-      const g = ctx.createGain(); g.gain.value = 0.07;
+      const g = ctx.createGain(); g.gain.value = 0.022;
       s.connect(f); f.connect(g); g.connect(master); s.start();
       rainNode = { s, g };
     } else if (!on && rainNode) { rainNode.s.stop(); rainNode = null; }
@@ -750,6 +751,19 @@ function buildWorld(seed) {
   geo.rotateX(-Math.PI / 2);
   const pos = geo.attributes.position;
   for (let i = 0; i < pos.count; i++) pos.setY(i, H(pos.getX(i), pos.getZ(i)));
+  // from here on the ground height is the drawn surface itself (the same triangles the GPU draws), so nothing
+  // can sink into a slope where the 10 m terrain triangles sit above the smooth height function
+  {
+    const NX = 320, NZ = 220, W = NX + 1, cw = SX / NX, cz = SZ / NZ, hv = new Float32Array(W * (NZ + 1)), Hs = H;
+    for (let iz = 0; iz <= NZ; iz++) for (let ix = 0; ix <= NX; ix++) hv[iz * W + ix] = pos.getY(iz * W + ix);
+    H = (x, z) => {
+      const gx = (x + SX / 2) / cw, gz = (z + SZ / 2) / cz;
+      if (!(gx >= 0 && gz >= 0 && gx < NX && gz < NZ)) return Hs(x, z);
+      const ix = gx | 0, iz = gz | 0, fx = gx - ix, fz = gz - iz, i = iz * W + ix;
+      const ha = hv[i], hb = hv[i + W], hc = hv[i + W + 1], hd = hv[i + 1];
+      return fx + fz <= 1 ? ha + (hd - ha) * fx + (hb - ha) * fz : hc + (hb - hc) * (1 - fx) + (hd - hc) * (1 - fz);
+    };
+  }
   geo = geo.toNonIndexed(); geo.computeVertexNormals();
   const p2 = geo.attributes.position, nrm = geo.attributes.normal;
   const cols = new Float32Array(p2.count * 3);
@@ -1866,7 +1880,7 @@ function whenModels(fn) { if (modelsDone) fn(); else modelWaiters.push(fn); }
 {
   const L = new GLTFLoader(); L.setMeshoptDecoder(MeshoptDecoder);
   const names = ['tank', 'jet', 'ship', 'jeep', 'drone', 'soldier', 'tree2', 'tank_lo', 'jet_lo', 'ship_lo', 'jeep_lo', 'drone_lo',
-    'country', 'country_lo', 'abandoned', 'abandoned_lo', 'moto', 'moto_lo', 'l9', 'l9_lo'];
+    'country', 'country_lo', 'abandoned', 'abandoned_lo', 'moto', 'moto_lo', 'l9', 'l9_lo', 'harley', 'harley_lo', 'shotgun'];
   let left = names.length;
   const prog = Object.fromEntries(names.map(n => [n, 0]));
   const showProg = () => { const k = Object.values(prog).reduce((a, b) => a + b, 0) / names.length; loadingUI(k * 0.9, 'ЗАГРУЗКА ' + Math.round(k * 90) + '%'); };
@@ -2228,8 +2242,8 @@ attribute vec2 aTrk; uniform float uTrkOff; uniform float uTrkLen; uniform vec2 
 // ── per-type fitting ──
 function dressVis(type, vis, color) {
   if (!modelsDone || vis.model) return;
-  const key = vis.skin === 'l9' && MODELS.l9 ? 'l9' : type;
-  const name = { tank: 'tank', plane: 'jet', ship: 'ship', jeep: 'jeep', icbm: 'topol', drone: 'drone', gunner: 'soldier', soldier: 'soldier', moto: 'moto', l9: 'l9' }[key];
+  const key = vis.skin && DRESS[vis.skin] && MODELS[vis.skin] ? vis.skin : type;
+  const name = { tank: 'tank', plane: 'jet', ship: 'ship', jeep: 'jeep', icbm: 'topol', drone: 'drone', gunner: 'soldier', soldier: 'soldier', moto: 'moto', l9: 'l9', harley: 'harley' }[key];
   if (!MODELS[name]) return;
   atOrigin(vis.g, () => DRESS[key](vis, color));
   vis.model = true;
@@ -2487,6 +2501,145 @@ const DRESS = {
     v.hiParts = [s]; v.loParts = man; v.lo = false;
   },
 };
+// ═══════════ HARLEY: an original biker (the game's own soldier, re-dressed) with a pump shotgun ═══════════
+// the bike: front towards +z, origin on the ground under its middle
+const HARLEY = {
+  S: 2.05,                                   // the scan is 1.14 m long; a Fatboy is about 2.35 m
+  FW: [0.84, 0.335], RW: [-0.82, 0.335],     // wheel centres (z, y) once scaled and fitted
+  HIP: [0, 0.86, -0.3],
+  GRIP_L: [0.36, 1.17, 0.18],
+  ARC: 1.9,                                  // how far round (each side) he can swing the shotgun
+  N: 11,                                     // arm poses sampled across that arc
+  SPIN: 0.72, RELOAD: 1.05,                  // spin-cock time, then a beat to aim again
+};
+// two-bone IK at dress time (the vehicle sits at the origin, so world space == vehicle space)
+function ik2(b1, b2, b3, T, pole) {
+  if (!b1 || !b2 || !b3) return;
+  const S = b1.getWorldPosition(new THREE.Vector3()), E0 = b2.getWorldPosition(new THREE.Vector3()), W0 = b3.getWorldPosition(new THREE.Vector3());
+  const l1 = S.distanceTo(E0), l2 = E0.distanceTo(W0);
+  const d = T.clone().sub(S), u = d.clone().normalize();
+  const dl = Math.min(d.length(), (l1 + l2) * 0.995);
+  const x = (l1 * l1 - l2 * l2 + dl * dl) / (2 * dl), h = Math.sqrt(Math.max(0, l1 * l1 - x * x));
+  const n = pole.clone().sub(u.clone().multiplyScalar(pole.dot(u))).normalize();
+  const E = S.clone().addScaledVector(u, x).addScaledVector(n, h);
+  aimBone(b1, b2, E.clone().sub(S));
+  aimBone(b2, b3, T.clone().sub(E));
+}
+const qOf = (...bs) => bs.map(b => b ? b.quaternion.clone() : null);
+function setQ(bs, qs) { bs.forEach((b, i) => { if (b && qs[i]) b.quaternion.copy(qs[i]); }); }
+function slerpQ(bs, qa, qb, t) { bs.forEach((b, i) => { if (b && qa[i] && qb[i]) b.quaternion.slerpQuaternions(qa[i], qb[i], t); }); }
+
+DRESS.harley = function (v, col) {
+  const g = v.g; hideProc(g);
+  const lean = new THREE.Group(); g.add(lean);                  // the whole bike leans onto the foot when it stops
+  const fit = name => {
+    const src = MODELS[name]; if (!src) return null;
+    const m = src.clone(true); m.scale.setScalar(HARLEY.S);
+    const h = new THREE.Group(); h.add(m); h.updateMatrixWorld(true);
+    _mb.setFromObject(m);
+    m.position.set(-(_mb.min.x + _mb.max.x) / 2, -_mb.min.y, -(_mb.min.z + _mb.max.z) / 2);
+    return h;
+  };
+  const holder = fit('harley'); lean.add(holder); g.updateMatrixWorld(true);
+  v.mats = ownMats(holder, col, 0.12);
+  // wheels: cut them out of the single mesh so they can roll
+  const parts = { fw: [], rw: [] }, meshes = []; holder.traverse(o => { if (o.isMesh) meshes.push(o); });
+  for (const m of meshes) {
+    const sp = splitMesh(m, p => Math.abs(p.x) < 0.1 && Math.hypot(p.z - HARLEY.FW[0], p.y - HARLEY.FW[1]) < 0.36 ? 'fw'
+      : Math.abs(p.x) < 0.14 && Math.hypot(p.z - HARLEY.RW[0], p.y - HARLEY.RW[1]) < 0.36 ? 'rw' : 'body');
+    for (const k in parts) if (sp[k]) parts[k].push(sp[k]);
+  }
+  const fw = pivotAt(lean, new THREE.Vector3(0, HARLEY.FW[1], HARLEY.FW[0]), ...parts.fw);
+  const rw = pivotAt(lean, new THREE.Vector3(0, HARLEY.RW[1], HARLEY.RW[0]), ...parts.rw);
+  v.wheels = [fw, rw];
+  // the rider
+  const s = fitModel('soldier', { height: 1.75, skinned: true });
+  const H = { lean, rider: s };
+  if (s) {
+    lean.add(s); s.updateMatrixWorld(true);
+    const bone = re => { let b = null; s.traverse(o => { if (!b && o.isBone && re.test(o.name)) b = o; }); return b; };
+    const side = sd => ['UpLeg', 'Leg', 'Foot', 'Arm', 'ForeArm', 'Hand'].map(n => bone(new RegExp(sd + n + '(_\\d+)?$')));
+    const [lUp, lLeg, lFoot, lArm, lFore, lHand] = side('Left'), [rUp, rLeg, rFoot, rArm, rFore, rHand] = side('Right');
+    const hips = bone(/Hips(_\d+)?$/), head = bone(/Head(_\d+)?$/);
+    // sit him on the seat
+    lean.updateMatrixWorld(true);
+    const hp = hips ? hips.getWorldPosition(new THREE.Vector3()) : new THREE.Vector3(0, 0.93, 0);
+    s.position.x += HARLEY.HIP[0] - hp.x; s.position.y += HARLEY.HIP[1] - hp.y; s.position.z += HARLEY.HIP[2] - hp.z;
+    s.updateMatrixWorld(true);
+    // legs on the forward pegs
+    const V = (x, y, z) => new THREE.Vector3(x, y, z);
+    ik2(lUp, lLeg, lFoot, V(0.3, 0.3, 0.32), V(0.3, 1, 0.8));
+    ik2(rUp, rLeg, rFoot, V(-0.3, 0.3, 0.32), V(-0.3, 1, 0.8));
+    const legL = [lUp, lLeg], seat = qOf(lUp, lLeg);
+    ik2(lUp, lLeg, lFoot, V(0.46, 0.06, -0.12), V(0.4, 0.2, 1));      // the left foot down on the ground
+    const down = qOf(lUp, lLeg); setQ(legL, seat);
+    // left hand on the grip
+    ik2(lArm, lFore, lHand, V(...HARLEY.GRIP_L), V(0.7, -1, -0.4));
+    // right arm: sampled poses holding the shotgun out across the arc
+    const sh = rArm ? rArm.getWorldPosition(new THREE.Vector3()) : V(-0.2, 1.3, -0.3);
+    const armB = [rArm, rFore], arm = [], hand = [];
+    for (let i = 0; i < HARLEY.N; i++) {
+      const a = -HARLEY.ARC + 2 * HARLEY.ARC * i / (HARLEY.N - 1);
+      const T = sh.clone().add(V(Math.sin(a) * 0.4, -0.1, Math.cos(a) * 0.4 + 0.04));
+      ik2(rArm, rFore, rHand, T, V(-1, -0.7, -0.3));
+      arm.push(qOf(rArm, rFore)); hand.push(T);
+    }
+    setQ(armB, arm[(HARLEY.N - 1) >> 1]);
+    Object.assign(H, { legL, seat, down, armB, arm, hand });
+    v.mats = v.mats.concat(ownMats(s, col, 0.1));
+    // biker look: dark leathers
+    s.traverse(o => { if (o.isMesh && o.material.userData.base) { o.material.userData.base.multiplyScalar(0.32); o.material.color.copy(o.material.userData.base); o.material.roughness = 0.55; } });
+    // a full-face helmet with a dark visor, on the head bone
+    if (head) {
+      const hm = new THREE.Group();
+      const shell = new THREE.Mesh(new THREE.SphereGeometry(0.15, 18, 12), new THREE.MeshStandardMaterial({ color: col, roughness: 0.25, metalness: 0.4 }));
+      shell.scale.set(1, 1.05, 1.12);
+      const visor = new THREE.Mesh(new THREE.SphereGeometry(0.152, 16, 8, Math.PI / 2 - 1.05, 2.1, 1.15, 0.75), new THREE.MeshStandardMaterial({ color: 0x0c0d10, roughness: 0.08, metalness: 0.8 }));
+      visor.scale.copy(shell.scale);
+      hm.add(shell, visor);
+      shell.material.userData = { real: true, base: shell.material.color.clone() }; v.mats.push(shell.material);
+      s.updateMatrixWorld(true);
+      const hw = head.getWorldPosition(new THREE.Vector3());
+      lean.add(hm); hm.position.copy(lean.worldToLocal(hw.add(V(0, 0.1, 0.02))));
+      lean.updateMatrixWorld(true); head.attach(hm);
+    }
+  }
+  // the shotgun: pivot in his right hand (turns with the aim), spin group inside for the reload
+  const gp = new THREE.Group(); gp.rotation.order = 'YXZ'; lean.add(gp);
+  const spin = new THREE.Group(); gp.add(spin);
+  const gun = fitModel('shotgun', { len: 0.95, rotY: Math.PI / 2, centerY: true });
+  if (gun) { gun.position.set(0, 0.03, 0.105); spin.add(gun); v.mats = v.mats.concat(ownMats(gun, 0xffffff, 0)); }
+  const tip = new THREE.Object3D(); tip.position.set(0, 0.06, 0.6); gp.add(tip);
+  v.tip = tip; v.turret = gp; v.gun = spin;
+  if (H.hand) gp.position.copy(H.hand[(HARLEY.N - 1) >> 1]);
+  Object.assign(H, { gp, spin });
+  v.harley = H;
+  const lo = (() => {
+    const src = MODELS.harley_lo; if (!src) return null;
+    const m = src.clone(true); m.scale.setScalar(HARLEY.S); m.position.copy(holder.children[0].position);
+    const h = new THREE.Group(); h.add(m); return h;
+  })();
+  if (lo) { lean.add(lo); v.mats = v.mats.concat(ownMats(lo, col, 0.12)); v.hiParts = [holder, fw, rw]; v.loParts = [lo]; v.lo = false; lo.visible = false; }
+};
+// every frame: right arm and shotgun follow the aim, the spin-cock after a shot, the foot down when stopped
+function animHarley(v, dt, rel) {
+  const H = v.vis.harley; if (!H) return;
+  v.spinT = (v.spinT ?? 9) + dt;
+  const a = Math.max(-HARLEY.ARC, Math.min(HARLEY.ARC, rel));
+  if (H.arm) {
+    const f = (a + HARLEY.ARC) / (2 * HARLEY.ARC) * (HARLEY.N - 1), i = Math.min(HARLEY.N - 2, Math.floor(f)), t = f - i;
+    slerpQ(H.armB, H.arm[i], H.arm[i + 1], t);
+    H.gp.position.lerpVectors(H.hand[i], H.hand[i + 1], t);
+  }
+  H.gp.rotation.set(-Math.max(-0.5, Math.min(0.6, v.aimPitch)), a, 0);
+  const k = Math.min(1, v.spinT / HARLEY.SPIN);
+  H.spin.rotation.x = k < 1 ? TAU * (k * k * (3 - 2 * k)) : 0;      // one full turn round his hand
+  // stopped: the left foot goes down and the bike leans onto it
+  const want = Math.abs(v.speed) < 1.5 && v.alive ? 1 : 0;
+  v.footK = (v.footK || 0) + (want - (v.footK || 0)) * Math.min(1, dt * 6);
+  if (H.legL) slerpQ(H.legL, H.seat, H.down, v.footK);
+  H.lean.rotation.z = -0.09 * v.footK;
+}
 // ═══════════ TREES: the two tree models, mixed at random ═══════════
 // near the camera: the full models, instanced per 250 m cell; further out: a cut-out picture of the same tree
 // on two crossed quads (rendered once from the model), so thousands of trees stay cheap
@@ -2930,9 +3083,9 @@ function updateVis(v, dt) {
     v.steerV = (v.steerV || 0) + ((v.f2 || 0) - (v.steerV || 0)) * Math.min(1, dt * 12);
     if (v.vis.steerers) for (const sg of v.vis.steerers) sg.rotation.y = v.steerV;     // front wheels turn
   } else if (v.type === 'moto') {
-    v.vis.turret.rotation.y = rel;
-    v.vis.gun.rotation.x = -v.aimPitch;
-    v.wheelA += v.speed * dt / 0.41;
+    if (v.vis.harley) animHarley(v, dt, rel);
+    else { v.vis.turret.rotation.y = rel; v.vis.gun.rotation.x = -v.aimPitch; }
+    v.wheelA += v.speed * dt / (v.vis.harley ? 0.335 : 0.41);
     for (const w of v.vis.wheels) w.rotation.x = v.wheelA;
     v.steerV = (v.steerV || 0) + ((v.f2 || 0) - (v.steerV || 0)) * Math.min(1, dt * 12);
     if (v.vis.steer) v.vis.steer.rotation.y = v.steerV;                                // fork, handlebars and front wheel
@@ -3198,6 +3351,7 @@ const SPEC = {
   navshell: { speed: 300, grav: 1, life: 8, geo: shellGeo, mat: shellMat, boom: 1.1 },
   mg: { speed: 650, grav: 0.3, life: 1.6, geo: bulletGeo, mat: tracerMat, len: 4 },
   ak: { speed: 715, grav: 0.3, life: 1.3, geo: bulletGeo, mat: tracerMat, len: 3 },
+  sg: { speed: 520, grav: 0.5, life: 1.3, geo: bulletGeo, mat: tracerMat, len: 5 },
   cannon: { speed: 900, grav: 0.2, life: 1.4, geo: bulletGeo, mat: tracerMat, len: 7 },
   icbm: { speed: 0, grav: 0, life: 60, geo: icbmGeo, mat: icbmMat, boom: 6, trail: true },
   bomb: { speed: 0, grav: 1.6, life: 25, geo: bombGeo, mat: bombMat, boom: 2.4, splash: 18 },
@@ -3313,6 +3467,7 @@ socket.on('shot', (pid, s) => {
   if (s.tv && s.tv === myVid) logMsg('<b style="color:#ff6a50">По вам пущена ракета!</b>');
   if (s.k === 'icbm') { centerMsg('РАКЕТНЫЙ УДАР!', 'цель отмечена на карте · ' + ICBM_T + ' с до удара', 4000, '#ff5a46'); audio.play('missile_alert', 0.9); setTimeout(() => audio.play('missile_alert', 0.9), 2300); audio.at('shoot', o, 2, 0.4, 3000); return; }
   if (s.k === 'mg' || s.k === 'cannon' || s.k === 'ak') { if (Math.random() < 0.5) audio.at('shoot', o, 0.25, s.k === 'mg' ? 1.9 : s.k === 'ak' ? 2.2 : 2.4, 700); }
+  else if (s.k === 'sg') { audio.at(gunSound(), o, 1.0, 1.15, 1500); particles.muzzle(o, vel.clone().normalize()); const sv = vehicles.get(s.vid); if (sv) sv.spinT = 0; }
   else if (s.k === 'shell' || s.k === 'navshell') { audio.at(gunSound(), o, 1.1, s.k === 'navshell' ? 0.85 : 1, 1800); particles.muzzle(o, vel.clone().normalize()); }
   else { audio.at('shoot', o, 1, s.k.includes('rocket') ? 0.6 : 0.8); particles.muzzle(o, vel.clone().normalize()); }
 });
@@ -3651,7 +3806,8 @@ function driveGround(v, dt, frozen) {
   v.aimYaw = wrap(v.aimYaw + Math.max(-rate * dt, Math.min(rate * dt, wrap(want - v.aimYaw))));
   if (tank) { v.vis.g.updateMatrixWorld(true); v.vis.tip.getWorldPosition(tp); }   // the shell starts at the muzzle
   const dist = Math.hypot(aimPt.x - tp.x, aimPt.z - tp.z), dy = aimTargetY() - tp.y;
-  const el = tank ? ballisticElev(dist, dy, SPEC.shell.speed, GRAV) : Math.atan2(dy, dist) + 0.5 * GRAV * 0.3 * dist / (SPEC.mg.speed * SPEC.mg.speed);
+  const harley = v.skin === 'harley', bs = harley ? SPEC.sg : SPEC.mg;
+  const el = tank ? ballisticElev(dist, dy, SPEC.shell.speed, GRAV) : Math.atan2(dy, dist) + 0.5 * GRAV * bs.grav * dist / (bs.speed * bs.speed);
   v.aimPitch += (Math.max(-0.2, Math.min(tank ? 0.35 : 0.9, el)) - v.aimPitch) * Math.min(1, dt * (tank ? 4 : 12));
   // weapons
   reload = Math.max(0, reload - dt);
@@ -3677,6 +3833,20 @@ function driveGround(v, dt, frozen) {
       particles.muzzle(o, dir); audio.play(gunSound(), 1.0); shake = Math.max(shake, 0.45);
       v.speed -= 0.8;
     }
+  } else if (harley) {
+    // pump shotgun: one blast, then he spins it round his hand to cock it and aims again
+    v.f1 = 0;
+    const rel = wrap(v.aimYaw - v.h), inArc = Math.abs(rel) <= HARLEY.ARC + 0.05;
+    gunMarker = null;
+    if (mouseFire && reload <= 0 && !chatOpen && inArc) {
+      reload = HARLEY.RELOAD; v.spinT = 0;
+      v.vis.g.updateMatrixWorld(true);
+      const o = v.vis.tip.getWorldPosition(new THREE.Vector3());
+      const dir = fwd(v.aimYaw, v.aimPitch, new THREE.Vector3());
+      fireShot('sg', o, dir);
+      particles.muzzle(o, dir); audio.play(gunSound(), 0.9, 0, 1.15); shake = Math.max(shake, 0.25);
+    }
+    if (!inArc) warnText = warnText || 'ДРОБОВИК НЕ ДОСТАЁТ НАЗАД';
   } else {
     v.f1 = mouseFire && !chatOpen ? 1 : 0;
     if (v.f1) {
@@ -4459,7 +4629,7 @@ const stratSel = new Set();
 let stratOn = false, stratGroups = [];
 const orderable = v => !!v && v.alive && !v.dead && v.team === myTeam() && !v.driver && ORDER_TYPES.includes(v.type) && !(v.type === 'plane' && v.air) && !v.spent && (!v.auto || v.auto === myId);
 // footprint: width / length in metres (HITBOX: half sizes)
-const foot = v => { const b = HITBOX[v.skin === 'l9' ? 'l9' : v.type] || [2, 0, 2, 3]; return [b[0] * 2, b[3] * 2]; };
+const foot = v => { const b = (HITBOX[v.skin] || HITBOX[v.type]) || [2, 0, 2, 3]; return [b[0] * 2, b[3] * 2]; };
 const ORDER_SPEED = { tank: 14, jeep: 18, moto: 18, icbm: 10, plane: 9, ship: 9 };
 
 // rows from the front: odd → 1 in front, then pairs; even → pairs
@@ -4881,10 +5051,10 @@ function updateCmd(dt) {
   } else { tip.style.display = 'none'; canvas.style.cursor = cmdDrag ? 'grabbing' : 'default'; }
 }
 const myTeam = () => { const p = me(); return p ? p.team : 0; };
-const typeName = v => v.skin === 'l9' ? 'Li L9' : TYPE_NAME[v.type];
-const vName = v => v.skin === 'l9' ? 'Li L9' : TYPE_NAME[v.type] + ' ' + v.n;
+const typeName = v => v.skin === 'l9' ? 'Li L9' : v.skin === 'harley' ? 'Харлей' : TYPE_NAME[v.type];
+const vName = v => v.skin === 'l9' ? 'Li L9' : v.skin === 'harley' ? 'Харлей' : TYPE_NAME[v.type] + ' ' + v.n;
 // can I get in? (a motorcycle also has the gunner's seat in its sidecar)
-const seatFree = v => !v.driver || v.driver === myId || (v.type === 'moto' && (!v.gunner || v.gunner === myId));
+const seatFree = v => !v.driver || v.driver === myId || (v.type === 'moto' && v.skin !== 'harley' && (!v.gunner || v.gunner === myId));
 function requestEnter(vid) {
   const v = vehicles.get(vid);
   if (!v || !v.alive) return;
@@ -4907,7 +5077,7 @@ function takeControl(v, seat) {
   camTrans = 1; camTransAt = performance.now(); sniper = false;
   document.body.classList.remove('cmdv');
   $('cmdtip').style.display = 'none'; canvas.style.cursor = '';
-  centerMsg(vName(v).toUpperCase() + (mySeat ? ' · СТРЕЛОК' : ''), mySeat ? 'Мышь — прицел · клик — огонь · колесо вниз — выйти' : v.skin === 'l9' ? 'WASD — ехать · мышь и клик — пулемёт · P — автопилот (точка на карте)' : v.type === 'moto' ? 'WASD — ехать · мышь и клик — пулемёт · второй игрок может сесть стрелком' : v.type === 'plane' ? 'W — тяга · разгон и мышь вверх' : v.type === 'gunner' ? 'Мышь — прицел · клик — огонь · колесо вниз — выйти' : v.type === 'icbm' ? 'WASD — ехать · остановитесь и ПКМ — наведение ракеты' : v.type === 'drone' ? 'W — взлёт · летит за мышью · взрывается при ударе' : v.type === 'soldier' ? 'WASD — идти · Shift — бег · клик — огонь · ПКМ — прицел · R — перезарядка' : 'Колесо вниз — наверх, к выбору техники', 1500);
+  centerMsg(vName(v).toUpperCase() + (mySeat ? ' · СТРЕЛОК' : ''), mySeat ? 'Мышь — прицел · клик — огонь · колесо вниз — выйти' : v.skin === 'l9' ? 'WASD — ехать · мышь и клик — пулемёт · P — автопилот (точка на карте)' : v.skin === 'harley' ? 'WASD — ехать · мышь — прицел · клик — дробовик (после выстрела — прокрутка)' : v.type === 'moto' ? 'WASD — ехать · мышь и клик — пулемёт · второй игрок может сесть стрелком' : v.type === 'plane' ? 'W — тяга · разгон и мышь вверх' : v.type === 'gunner' ? 'Мышь — прицел · клик — огонь · колесо вниз — выйти' : v.type === 'icbm' ? 'WASD — ехать · остановитесь и ПКМ — наведение ракеты' : v.type === 'drone' ? 'W — взлёт · летит за мышью · взрывается при ударе' : v.type === 'soldier' ? 'WASD — идти · Shift — бег · клик — огонь · ПКМ — прицел · R — перезарядка' : 'Колесо вниз — наверх, к выбору техники', 1500);
   lockPointer();
 }
 function leaveVehicle(force) {
@@ -5228,6 +5398,7 @@ function updateBottom() {
   const bar = (i, l, frac, col) => { $('g' + i + 'l').textContent = l; $('g' + i).style.width = Math.round(Math.max(0, Math.min(1, frac)) * 100) + '%'; $('g' + i).style.background = col; };
   set(1, 'КМ/Ч', Math.round(Math.abs(v.speed) * 3.6));
   if (v.type === 'tank') { set(2, 'ПРИЦЕЛ', aimHit ? Math.round(aimHit.t) + ' м' : '—'); bar(3, 'ПУШКА', 1 - reload / 4, reload > 0 ? '#e3a53c' : '#9bdc6a'); bar(4, 'БРОНЯ', k, '#9aa39a'); set(5, 'SHIFT / ПКМ', sniper ? 'ОБЗОР' : 'ПРИЦЕЛ'); }
+  else if (v.skin === 'harley') { set(2, 'ПРИЦЕЛ', aimHit ? Math.round(aimHit.t) + ' м' : '—'); bar(3, 'ДРОБОВИК', reload > 0 ? 1 - reload / HARLEY.RELOAD : 1, reload > 0 ? '#e0b050' : '#9bdc6a'); bar(4, 'КОРПУС', k, '#9aa39a'); set(5, 'ЭКИПАЖ', 'ВЫ САМИ'); }
   else if (v.type === 'moto') { set(2, 'ПРИЦЕЛ', aimHit ? Math.round(aimHit.t) + ' м' : '—'); bar(3, 'ПУЛЕМЁТ', 1, '#9bdc6a'); bar(4, 'КОРПУС', k, '#9aa39a'); set(5, mySeat ? 'ВОДИТЕЛЬ' : 'СТРЕЛОК', mySeat ? (v.driver ? nameOf(v.driver) : '—') : (v.gunner && v.gunner !== myId ? nameOf(v.gunner) : 'ВЫ САМИ')); }
   else if (v.type === 'jeep') { set(2, 'ПРИЦЕЛ', aimHit ? Math.round(aimHit.t) + ' м' : '—'); bar(3, 'ПУЛЕМЁТ', 1, '#9bdc6a'); bar(4, 'КОРПУС', k, '#9aa39a'); set(5, 'КЛИК', 'ОГОНЬ'); }
   else if (v.type === 'plane') { set(2, 'ВЫСОТА', Math.round(v.pos.y - Math.max(0, H(v.pos.x, v.pos.z))) + ' м'); bar(3, 'ТЯГА', v.thr, '#8fc3e8'); bar(4, 'РАКЕТЫ ' + v.rk + ' · ПКМ', v.rk / 16, '#ffb03a'); set(5, 'БОМБЫ · ПРОБЕЛ', v.bombs + ' / 3'); }
