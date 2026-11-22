@@ -2594,34 +2594,8 @@ DRESS.harley = function (v, col) {
     }
     setQ(armB, arm[(HARLEY.N - 1) >> 1]);
     Object.assign(H, { legL, seat, down, armB, arm, hand });
-    v.mats = v.mats.concat(ownMats(s, col, 0.1));
-    // biker look: dark leathers
-    s.traverse(o => { if (o.isMesh && o.material.userData.base) { o.material.userData.base.multiplyScalar(0.32); o.material.color.copy(o.material.userData.base); o.material.roughness = 0.55; } });
-    // his own head: an original bald, bearded biker with a team-coloured bandana (the army helmet shrinks away)
-    if (head) {
-      const hm = new THREE.Group();
-      const M = (c, r) => new THREE.MeshStandardMaterial({ color: c, roughness: r });
-      const skin = M(0xb8896a, 0.7), hair = M(0x2a1f17, 0.95), dark = M(0x111111, 0.4), band = M(col, 0.8);
-      const add = (geo, m, x, y, z, sx = 1, sy = 1, sz = 1) => { const o = new THREE.Mesh(geo, m); o.position.set(x, y, z); o.scale.set(sx, sy, sz); o.castShadow = true; hm.add(o); return o; };
-      add(new THREE.SphereGeometry(0.1, 20, 16), skin, 0, 0, 0, 0.9, 1.1, 1.0);                                   // skull
-      add(new THREE.SphereGeometry(0.085, 16, 10), skin, 0, -0.06, 0.02, 0.92, 0.8, 1.0);                          // jaw
-      add(new THREE.SphereGeometry(0.09, 16, 10, Math.PI / 2 - 1.3, 2.6, 1.6, 1.4), hair, 0, -0.045, 0.02, 0.98, 1.05, 1.07);   // beard
-      add(new THREE.BoxGeometry(0.06, 0.012, 0.015), hair, 0, -0.035, 0.093);                                     // moustache
-      add(new THREE.ConeGeometry(0.014, 0.04, 8), skin, 0, -0.005, 0.1).rotation.x = Math.PI / 2 - 0.3;           // nose
-      for (const sx of [-1, 1]) {
-        add(new THREE.SphereGeometry(0.009, 8, 6), dark, sx * 0.03, 0.022, 0.088);                               // eyes
-        add(new THREE.BoxGeometry(0.035, 0.008, 0.012), hair, sx * 0.03, 0.04, 0.09).rotation.z = -sx * 0.15;     // brows
-        add(new THREE.SphereGeometry(0.022, 8, 6), skin, sx * 0.092, 0.0, -0.005, 0.45, 1, 0.75);                 // ears
-      }
-      add(new THREE.SphereGeometry(0.103, 20, 10, 0, TAU, 0, 1.25), band, 0, 0.012, -0.004, 0.92, 1.1, 1.02);      // bandana
-      add(new THREE.SphereGeometry(0.02, 8, 6), band, 0, 0.03, -0.1, 1.2, 0.8, 0.8);                               // its knot
-      band.userData = { real: true, base: band.color.clone() }; v.mats.push(band);
-      s.updateMatrixWorld(true);
-      const hw = head.getWorldPosition(new THREE.Vector3()); hm.scale.setScalar(1.12);
-      lean.add(hm); hm.position.copy(lean.worldToLocal(hw.add(V(0, 0.08, 0.025))));
-      head.scale.setScalar(0.01);                           // the soldier's own head and army helmet are not drawn
-      lean.updateMatrixWorld(true); (head.parent || head).attach(hm);
-    }
+    v.mats = v.mats.concat(ownMats(s, col, 0.1));   // dressed like the other motorcycle riders and machine-gunners
+    // his head: the same as the other soldiers riding the motorcycles and manning the machine guns
   }
   // the shotgun: pivot in his right hand (turns with the aim), spin group inside for the reload
   const gp = new THREE.Group(); gp.rotation.order = 'YXZ'; lean.add(gp);
