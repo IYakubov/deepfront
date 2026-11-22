@@ -2521,6 +2521,19 @@ function harleyWheelOf(c, tri) {
   }
   return 'body';
 }
+// split a skinned mesh by its bones: triangles carried by the neck/head stay as they are, the rest get the suit
+function harleySuit(mesh, suit) {
+  const geo = mesh.geometry, si = geo.attributes.skinIndex, sw = geo.attributes.skinWeight, idx = geo.index; if (!si || !sw) return;
+  const bones = mesh.skeleton.bones, top = new Set();
+  bones.forEach((b, i) => { for (let p = b; p; p = p.parent) if (/(Neck|Head)(_\d+)?$/.test(p.name)) { top.add(i); break; } });
+  const headW = vi => { let w = 0; for (let c = 0; c < 4; c++) if (top.has(si.getComponent(vi, c))) w += sw.getComponent(vi, c); return w; };
+  const n = idx ? idx.count : geo.attributes.position.count, gi = i => idx ? idx.getX(i) : i;
+  const body = [], head = [];
+  for (let i = 0; i < n; i += 3) { const t = [gi(i), gi(i + 1), gi(i + 2)]; (t.reduce((a, v) => a + headW(v), 0) / 3 > 0.5 ? head : body).push(...t); }
+  const g2 = geo.clone(); g2.setIndex(body.concat(head)); g2.clearGroups();
+  g2.addGroup(0, body.length, 0); g2.addGroup(body.length, head.length, 1);
+  mesh.geometry = g2; mesh.material = [suit, mesh.material];
+}
 // two-bone IK at dress time (the vehicle sits at the origin, so world space == vehicle space)
 function ik2(b1, b2, b3, T, pole) {
   if (!b1 || !b2 || !b3) return;
@@ -2594,7 +2607,11 @@ DRESS.harley = function (v, col) {
     }
     setQ(armB, arm[(HARLEY.N - 1) >> 1]);
     Object.assign(H, { legL, seat, down, armB, arm, hand });
-    v.mats = v.mats.concat(ownMats(s, col, 0.1));   // dressed like the other motorcycle riders and machine-gunners
+    v.mats = v.mats.concat(ownMats(s, col, 0.1));
+    // the soldier's own head (helmet, balaclava), the rest of him in a black leather suit
+    const leather = new THREE.MeshStandardMaterial({ color: 0x1b1b1d, roughness: 0.42, metalness: 0.08 });
+    leather.userData = { real: true, base: leather.color.clone() }; v.mats.push(leather);
+    s.traverse(o => { if (o.isSkinnedMesh) harleySuit(o, leather); });
     // his head: the same as the other soldiers riding the motorcycles and manning the machine guns
   }
   // the shotgun: pivot in his right hand (turns with the aim), spin group inside for the reload
