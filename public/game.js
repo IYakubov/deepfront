@@ -306,7 +306,7 @@ const audio = (() => {
     if (on && !rainNode) {
       const s = ctx.createBufferSource(); s.buffer = noiseBuf; s.loop = true;
       const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 2400; f.Q.value = 0.5;
-      const g = ctx.createGain(); g.gain.value = 0.022;
+      const g = ctx.createGain(); g.gain.value = 0.0045;
       s.connect(f); f.connect(g); g.connect(master); s.start();
       rainNode = { s, g };
     } else if (!on && rainNode) { rainNode.s.stop(); rainNode = null; }
