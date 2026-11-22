@@ -3361,7 +3361,7 @@ const SPEC = {
   navshell: { speed: 300, grav: 1, life: 8, geo: shellGeo, mat: shellMat, boom: 1.1 },
   mg: { speed: 650, grav: 0.3, life: 1.6, geo: bulletGeo, mat: tracerMat, len: 4 },
   ak: { speed: 715, grav: 0.3, life: 1.3, geo: bulletGeo, mat: tracerMat, len: 3 },
-  sg: { speed: 520, grav: 0.5, life: 1.3, geo: bulletGeo, mat: tracerMat, len: 5 },
+  sg: { speed: 520, grav: 0.5, life: 0.24, geo: bulletGeo, mat: tracerMat, len: 5 },
   cannon: { speed: 900, grav: 0.2, life: 1.4, geo: bulletGeo, mat: tracerMat, len: 7 },
   icbm: { speed: 0, grav: 0, life: 60, geo: icbmGeo, mat: icbmMat, boom: 6, trail: true },
   bomb: { speed: 0, grav: 1.6, life: 25, geo: bombGeo, mat: bombMat, boom: 2.4, splash: 18 },
@@ -3374,7 +3374,7 @@ function spawnShot(k, o, vel, mine, ownerVid, extra = {}) {
   const mesh = new THREE.Mesh(sp.geo, sp.mat);
   if (sp.len) mesh.scale.z = sp.len;
   mesh.position.copy(o); scene.add(mesh);
-  const s = Object.assign({ k, pos: o.clone(), vel: vel.clone(), mine, ownerVid, age: 0, mesh, trailT: 0 }, extra);
+  const s = Object.assign({ k, pos: o.clone(), o0: o.clone(), vel: vel.clone(), mine, ownerVid, age: 0, mesh, trailT: 0 }, extra);
   // a jet's missile drops off the pylon first, then lights its motor and accelerates
   if (k === 'rocket') { s.vmax = vel.length(); s.dir0 = vel.clone().normalize(); s.drop = 0.32; s.vel.setLength(Math.max(45, s.vmax * 0.36)); s.offY = 0; s.fallV = 0; }
   shots.push(s);
@@ -3387,6 +3387,8 @@ function hitVehicle(v, k, pt, scale = 1) {
   if (k === 'mg' && (v.type === 'tank' || v.type === 'ship')) { v.mgTick = ((v.mgTick || 0) + 1) % 3; if (v.mgTick) return; }
   socket.emit('hit', { vid: v.vid, dmg, k, pt: [+pt.x.toFixed(1), +pt.y.toFixed(1), +pt.z.toFixed(1)] });
 }
+// the shotgun: full damage up to 50 m, then the shot spreads out — a fifth of it at 90 m, gone at about 120 m
+const sgFalloff = d => d <= 50 ? 1 : Math.max(0.05, 1 - (d - 50) / 40 * 0.8);
 const HANGAR_DMG = k => (DMG[k] && DMG[k].tank) || 0;       // a hangar takes what a tank would
 function impact(s, pt, kind, v) {
   const sp = SPEC[s.k];
@@ -3403,7 +3405,7 @@ function impact(s, pt, kind, v) {
     const near = Math.max(Math.abs(pt.x - hg.x) - hg.hx, Math.abs(pt.z - hg.z) - hg.hz, 0) < (sp.splash || 1.5) && pt.y < BASE_Y + 16;
     if (near) socket.emit('hhit', { team: hg.team, dmg: HANGAR_DMG(s.k) });
   }
-  if (kind === 'veh' && v && v.team !== myTeam) hitVehicle(v, s.k, pt);
+  if (kind === 'veh' && v && v.team !== myTeam) hitVehicle(v, s.k, pt, s.k === 'sg' ? sgFalloff(s.o0.distanceTo(pt)) : 1);
   if (sp.splash) for (const o of vehicles.values()) {   // blast damage nearby
     if (!o.alive || o === v || o.team === myTeam) continue;
     const d = o.pos.distanceTo(pt);
