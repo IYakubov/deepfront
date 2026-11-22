@@ -139,7 +139,7 @@ function renderLobby() {
   }
   // map choice (the host picks)
   const cur = room.map || 'valley';
-  $('maps').innerHTML = MAP_LIST.map(m => `<button data-map="${m.id}" class="${m.id === cur ? 'on' : ''}" ${isHost() ? '' : 'disabled'}><img src="maps/${m.id}.jpg?v=${ASSET_V}" alt=""><b>${m.name}</b><span>${m.desc}</span></button>`).join('');
+  $('maps').innerHTML = MAP_LIST.map(m => `<button data-map="${m.id}" class="${m.id === cur ? 'on' : ''}" ${isHost() ? '' : 'disabled'}><img src="maps/${m.id}.jpg?v=${ASSET_V}b" alt=""><b>${m.name}</b><span>${m.desc}</span></button>`).join('');
   $('maps').querySelectorAll('button').forEach(b => b.onclick = () => { if (isHost() && b.dataset.map !== cur) socket.emit('setMap', b.dataset.map); });
   $('startBtn').disabled = !isHost();
   $('startBtn').textContent = isHost() ? (room.players.length < 2 ? 'Начать (тренировка)' : 'Начать бой') : 'Ожидание хоста…';
@@ -483,7 +483,7 @@ function camFade(mat, near, far) {
 
 // ═══════════ MAPS ═══════════
 // 'valley' — the first map (hills, sea in the south); 'ice' — Ледяной остров: a winter island with three
-// mountain ranges in the middle, low canyons between them, dirt tracks around. Both keep the same bases,
+// one mountain massif in the middle cut by narrow zig-zag canyons, dirt tracks around. Both keep the same bases,
 // runways, hangars and ports, so the vehicle layout on the server is shared.
 const MAP_LIST = [
   { id: 'valley', name: 'Долина', desc: 'Холмы, городки и море на юге' },
@@ -499,11 +499,7 @@ const ICE = {
     [[-700, 40], [-440, -10], [-150, 80], [150, 0], [430, 70], [700, 30]],
     [[-640, 500], [-400, 560], [-130, 480], [150, 550], [420, 480], [640, 540]],
   ],
-  canyons: [  // valley floors (low-flying routes)
-    [[-1000, -200], [-700, -225], [-420, -190], [-150, -245], [150, -200], [450, -245], [700, -205], [1000, -215]],
-    [[-1000, 280], [-700, 260], [-430, 295], [-150, 250], [150, 295], [440, 250], [700, 285], [1000, 270]],
-    [[-120, -1080], [-130, -840], [-60, -640], [-150, -245]],
-  ],
+  canyons: null,   // built by iceCanyons(): narrow zig-zag gorges through one solid mountain massif
   roads: [    // packed-snow dirt tracks: a ring around the mountains + spurs
     [[-980, -420], [-760, -760], [-380, -900], [0, -930], [380, -900], [760, -760], [980, -420], [1010, -60], [980, 330], [800, 760], [420, 900], [0, 960], [-420, 900], [-800, 760], [-980, 330], [-1010, -60], [-980, -420]],
     [[-1010, -60], [-1150, -60]], [[1010, -60], [1150, -60]], [[-980, 330], [-1060, 300]], [[980, 330], [1060, 300]],
@@ -514,6 +510,22 @@ const ICE = {
   coastZ: x => { const g = ICE.coast; if (!g) return 600; const i = Math.max(0, Math.min(g.length - 1, Math.round((x + MAP_X + 500) / 10))); return g[i]; },
   grid: null,
 };
+// "a snake that caught a cold": tight, uneven zig-zags, so there is no straight line through
+function iceCanyons() {
+  if (ICE.canyons) return ICE.canyons;
+  // long bends (a plane can just make them: turn radius ~100 m) — no straight line of sight end to end
+  const rnd = mulberry32(4242), zig = (z0, amp0) => {
+    const pts = [[-1060, z0], [-930, z0]];
+    let x = -930, side = rnd() < .5 ? 1 : -1;
+    while (x < 520) { x += 270 + rnd() * 90; pts.push([x, z0 + side * amp0 * (0.8 + rnd() * 0.35)]); side = -side; }
+    pts.push([930, z0], [1060, z0]);
+    return pts;
+  };
+  const gorge = [[-140, -1100], [-140, -980]];
+  for (let z = -980, side = 1; z < -420; side = -side) { z += 190 + rnd() * 50; gorge.push([-140 + side * (75 + rnd() * 25), Math.min(z, -420)]); }
+  gorge.push([-140, -300]);
+  return (ICE.canyons = [zig(-200, 115), zig(300, 115), gorge]);
+}
 function catmullPts(pts, n = 10) {
   const out = [], p = [pts[0], ...pts, pts[pts.length - 1]];
   for (let i = 1; i < p.length - 2; i++) for (let k = 0; k < n; k++) {
@@ -538,9 +550,9 @@ function iceGrid() {
   const n1 = makeNoise(mulberry32(911)), n2 = makeNoise(mulberry32(912)), n3 = makeNoise(mulberry32(913));
   const fbm = (n, x, z, o) => { let s = 0, a = 1, t = 0; for (let i = 0; i < o; i++) { s += n(x, z) * a; t += a; a *= .5; x *= 2.03; z *= 2.03; } return s / t; };
   const ridged = (x, z) => { let s = 0, a = 1, t = 0; for (let i = 0; i < 6; i++) { const v = 1 - Math.abs(n1(x, z) * 2 - 1); s += v * a; t += a; a *= .5; x *= 2.07; z *= 2.07; } return s / t; };
-  const ranges = ICE.ranges.map(r => catmullPts(r, 5)), canyons = ICE.canyons.map(c => catmullPts(c, 4));
+  const ranges = ICE.ranges.map(r => catmullPts(r, 5)), canyons = iceCanyons().map(c => catmullPts(c, 5));
   const bbox = (pts, m) => { let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9; for (const [x, z] of pts) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z); } return [x0 - m, x1 + m, z0 - m, z1 + m]; };
-  const rbox = ranges.map(r => bbox(r, 470)), cbox = canyons.map(c => bbox(c, 115));
+  const rbox = ranges.map(r => bbox(r, 470)), cbox = canyons.map(c => bbox(c, 95));
   const inB = (b, x, z) => x > b[0] && x < b[1] && z > b[2] && z < b[3];
   const g = new Float32Array(ICE_NX * ICE_NZ);
   for (let j = 0; j < ICE_NZ; j++) for (let i = 0; i < ICE_NX; i++) {
@@ -559,10 +571,11 @@ function iceGrid() {
       const d = segDist(x, z, ranges[r]), w = 150 * (0.45 + 1.1 * fbm(n3, x * 0.006 + r * 7, z * 0.006, 4));
       mask = Math.max(mask, Math.pow(smooth(w * 1.5, w * 0.1, d), 1.4) + 0.2 * smooth(w * 2.1, w * 1.1, d));
     }
-    mask = Math.min(1, mask) * smooth(830 + (n3(x * 0.005, z * 0.005 + 9) - .5) * 300, 520, ax);
-    if (mask > 0) h += Math.pow(mask, 0.9) * (80 + 600 * Math.pow(ridged(x * 0.0042, z * 0.0042), 1.7) * (0.55 + 0.7 * fbm(n3, x * 0.0038 + 3, z * 0.0038 - 4, 3)));
+    const Rm = Math.hypot(x / 860, (z - 20) / 760) * (1 + (fbm(n3, x * 0.004 + 11, z * 0.004, 3) - .5) * .35);
+    mask = Math.max(Math.min(1, mask), smooth(1.0, 0.72, Rm)) * smooth(900 + (n3(x * 0.005, z * 0.005 + 9) - .5) * 200, 640, ax);
+    if (mask > 0) h += Math.pow(mask, 0.9) * (190 + 480 * Math.pow(ridged(x * 0.0042, z * 0.0042), 1.6) * (0.55 + 0.7 * fbm(n3, x * 0.0038 + 3, z * 0.0038 - 4, 3)));
     // canyon floors
-    for (let ci = 0; ci < canyons.length; ci++) { const c = canyons[ci]; if (!inB(cbox[ci], x, z)) continue; const k = smooth(110, 15, segDist(x, z, c)); if (k > 0) h = h * (1 - .8 * k) + (40 + 10 * n2(x * 0.008, z * 0.008)) * .8 * k; }
+    for (let ci = 0; ci < canyons.length; ci++) { const c = canyons[ci]; if (!inB(cbox[ci], x, z)) continue; const k = smooth(90, 22, segDist(x, z + (n2(x * 0.011, z * 0.011 + 31) - .5) * 34, c)); /* shivering walls */ if (k > 0) h = lerp(h, Math.min(h, 38 + 8 * n2(x * 0.008, z * 0.008)), k); }
     // flat bases and runways (same as the first map)
     let flat = 0;
     for (const b of BASES) flat = Math.max(flat, 1 - smooth(BASE_R + 50, BASE_R + 190, Math.hypot(x - b.x, z - b.z)));
