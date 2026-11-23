@@ -1218,11 +1218,28 @@ function updateGrass() {
 // and headlights on the machine you drive
 const STORM = { rain: null, seeds: null, lights: [], search: [], head: null, flashT: 0, nextFlash: 8, flashSeq: null };
 (() => {
-  const N = 7000, pos = new Float32Array(N * 6);
-  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  const rain = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0x8ea3b8, transparent: true, opacity: 0.42 }));
+  // the streaks fall in the vertex shader (no per-frame buffer upload); 3000 of them instead of 7000
+  const N = 3000, seed = new Float32Array(N * 6), tip = new Float32Array(N * 2);
+  for (let i = 0; i < N; i++) {
+    const x = Math.random() * 260 - 130, y = Math.random() * 110, z = Math.random() * 260 - 130;
+    seed.set([x, y, z, x, y, z], i * 6); tip[i * 2 + 1] = 1;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(seed, 3)); g.setAttribute('tip', new THREE.BufferAttribute(tip, 1));
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { t: { value: 0 }, cam: { value: new THREE.Vector3() }, wind: { value: 0 }, col: { value: new THREE.Color(0x8ea3b8) } },
+    vertexShader: `uniform float t; uniform vec3 cam; uniform float wind; attribute float tip;
+      void main() {
+        float y = mod(position.y - t * 42.0, 110.0) - 35.0 + cam.y;
+        vec3 p = vec3(cam.x + position.x + wind * (y - cam.y) * 0.05, y, cam.z + position.z) + tip * vec3(-0.4, 2.4, -0.15);
+        gl_Position = projectionMatrix * viewMatrix * vec4(p, 1.0);
+      }`,
+    fragmentShader: `uniform vec3 col; void main() { gl_FragColor = vec4(col, 0.42); }`,
+    transparent: true, depthWrite: false
+  });
+  const rain = new THREE.LineSegments(g, mat);
   rain.frustumCulled = false; rain.visible = false; rain.renderOrder = 2; scene.add(rain);
-  STORM.rain = rain; STORM.seeds = Array.from({ length: N }, () => [Math.random() * 260 - 130, Math.random() * 110, Math.random() * 260 - 130]);
+  STORM.rain = rain;
   const head = new THREE.SpotLight(0xfff2d0, 0, 140, 0.42, 0.5, 1.2); head.visible = false; scene.add(head, head.target);
   STORM.head = head;
 })();
@@ -1246,12 +1263,8 @@ function stormSetup() {
 function updateStorm(dt) {
   if (MAP_ID !== 'storm' || !STORM.rain.visible) return;
   // rain: streaks falling around the camera
-  const pos = STORM.rain.geometry.attributes.position.array, t = performance.now() / 1000, c = camera.position, wind = Math.sin(t * 0.3) * 6;
-  for (let i = 0, n = STORM.seeds.length; i < n; i++) {
-    const s = STORM.seeds[i], y = ((s[1] - t * 42) % 110 + 110) % 110 - 35 + c.y, x = c.x + s[0] + wind * (y - c.y) * 0.05, z = c.z + s[2];
-    const o = i * 6; pos[o] = x; pos[o + 1] = y; pos[o + 2] = z; pos[o + 3] = x - 0.4; pos[o + 4] = y + 2.4; pos[o + 5] = z - 0.15;
-  }
-  STORM.rain.geometry.attributes.position.needsUpdate = true;
+  const t = performance.now() / 1000, u = STORM.rain.material.uniforms;
+  u.t.value = t % 1100;   // 1100 s × 42 m/s is a whole number of 110 m loops: no jump u.cam.value.copy(camera.position); u.wind.value = Math.sin(t * 0.3) * 6;
   // searchlights sweep the field in front of each base
   for (const q of STORM.search) {
     q.a += dt * 0.35;
@@ -3965,7 +3978,7 @@ function drivePlane(v, dt, frozen) {
   if (v.air) {
     const nose = fwd(v.h, v.p, _v1);
     for (const o of vehicles.values()) {
-      if (!o.alive || o.team === v.team || o.dead) continue;
+      if (!o.alive || o.team === v.team || o.dead || o.type === 'gunner') continue;   // a man at a machine gun is too small for the plane's lock
       const dx = o.pos.x - v.pos.x, dy = o.pos.y - v.pos.y, dz = o.pos.z - v.pos.z, d = Math.hypot(dx, dy, dz);
       if (d > LOCK_RANGE || d < 40) continue;
       const ang = Math.acos(Math.max(-1, Math.min(1, (dx * nose.x + dy * nose.y + dz * nose.z) / d)));
