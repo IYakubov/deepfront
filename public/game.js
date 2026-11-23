@@ -1218,8 +1218,8 @@ function updateGrass() {
 // and headlights on the machine you drive
 const STORM = { rain: null, seeds: null, lights: [], search: [], head: null, flashT: 0, nextFlash: 8, flashSeq: null };
 (() => {
-  // the streaks fall in the vertex shader (no per-frame buffer upload); 3000 of them instead of 7000
-  const N = 3000, seed = new Float32Array(N * 6), tip = new Float32Array(N * 2);
+  // the streaks fall in the vertex shader (no per-frame buffer upload); 4500 of them instead of 7000
+  const N = 4500, seed = new Float32Array(N * 6), tip = new Float32Array(N * 2);
   for (let i = 0; i < N; i++) {
     const x = Math.random() * 260 - 130, y = Math.random() * 110, z = Math.random() * 260 - 130;
     seed.set([x, y, z, x, y, z], i * 6); tip[i * 2 + 1] = 1;
@@ -1234,7 +1234,9 @@ const STORM = { rain: null, seeds: null, lights: [], search: [], head: null, fla
         vec3 p = vec3(cam.x + position.x + wind * (y - cam.y) * 0.05, y, cam.z + position.z) + tip * vec3(-0.4, 2.4, -0.15);
         gl_Position = projectionMatrix * viewMatrix * vec4(p, 1.0);
       }`,
-    fragmentShader: `uniform vec3 col; void main() { gl_FragColor = vec4(col, 0.42); }`,
+    fragmentShader: `uniform vec3 col; void main() { gl_FragColor = vec4(col, 0.5);
+      #include <colorspace_fragment>
+    }`,
     transparent: true, depthWrite: false
   });
   const rain = new THREE.LineSegments(g, mat);
@@ -1247,13 +1249,14 @@ const STORM = { rain: null, seeds: null, lights: [], search: [], head: null, fla
 function stormSetup() {
   const on = MAP_ID === 'storm';
   STORM.rain.visible = on; STORM.head.visible = on; STORM.lights = []; STORM.search = [];
+  sun.castShadow = !on;          // at night the moon's shadows are barely visible: skip the whole shadow pass (a big part of the frame)
   audio.rain(on);
   treeTint();
   if (!on || !world) return;
   for (const team of [0, 1]) {
     const B = BASES[team], sx = team ? -1 : 1;
-    for (const [ox, oz] of [[60, 0], [-30, 60], [-60, -100]]) {
-      const l = new THREE.PointLight(0xffc27a, 160, 90, 1.5); l.position.set(B.x + sx * ox, BASE_Y + 8, B.z + oz); world.group.add(l); STORM.lights.push(l);
+    for (const [ox, oz] of [[10, -10]]) {            // one warm lamp per base: every extra light is paid by every pixel on screen
+      const l = new THREE.PointLight(0xffc27a, 260, 150, 1.4); l.position.set(B.x + sx * ox, BASE_Y + 8, B.z + oz); world.group.add(l); STORM.lights.push(l);
     }
     const s = new THREE.SpotLight(0xdfe8ff, 500, 700, 0.1, 0.5, 1);
     s.position.set(B.x + sx * 30, BASE_Y + 40, B.z - 70); world.group.add(s, s.target);
@@ -5859,7 +5862,7 @@ function updateBaseAlarm(now) {
 }
 let last = performance.now(), menuAngle = 0, listT = 0;
 // keep the frame rate up: if frames get slow, draw fewer pixels (and go back up when there is room)
-const RES_STEPS = [1.5, 1.25, 1, 0.85].filter(r => r <= Math.max(1, Math.min(devicePixelRatio, 1.5)) + 1e-6);
+const RES_STEPS = [1.5, 1.25, 1, 0.85, 0.72, 0.62].filter(r => r <= Math.max(1, Math.min(devicePixelRatio, 1.5)) + 1e-6);
 let resI = 0, resAcc = 0, resN = 0, resHold = 0;
 function adaptRes(dt) {
   if (document.hidden || dt <= 0) return;
