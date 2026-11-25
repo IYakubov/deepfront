@@ -743,6 +743,7 @@ function applyMap(id) {
   coastZ = ice ? ICE.coastZ : mars ? () => 1e6 : VALLEY_COAST;
   roadZ = ice || mars ? () => 1e6 : VALLEY_ROAD;
   GRAV = mars ? 3.7 : 9.8;
+  CAM.drone = mars ? [4, 18, 7] : [0, 0, 0];      // Mars space drones: chase camera like a plane
   if (mars) {      // butterscotch sky, dusty haze, a smaller and paler sun
     SKY.set(0xc8a07a); scene.fog.color.copy(SKY); skyTop.set(0x7d5a44);
     scene.fog.near = 500; scene.fog.far = 2900;
@@ -5492,7 +5493,7 @@ function renderCmdList() {
 // ═══════════ VEHICLE CAMERA ═══════════
 function updateDriveCam(dt) {
   const v = myVehicle(); if (!v) return;
-  if (v.type === 'drone') {   // first-person view through the drone's camera
+  if (v.type === 'drone' && MAP_ID !== 'mars') {   // first-person view through the drone's camera (on Mars: chase view like a plane)
     camera.fov = lerp(camera.fov, 100, 1 - Math.exp(-10 * dt)); camera.updateProjectionMatrix();
     const f = v.air ? fwd(v.h, v.p, _v1) : fwd(camYaw, camPitch, _v1);
     camera.position.copy(v.pos).addScaledVector(f, 0.5); camera.position.y += 0.15;
@@ -5518,7 +5519,7 @@ function updateDriveCam(dt) {
     camTrans = 0; setShadowSize(120); placeSun(v.pos.x, v.pos.y, v.pos.z);
     return;
   }
-  const base = _v4.copy(v.pos); base.y += v.type === 'ship' ? 10 : v.type === 'plane' ? 2.5 : v.type === 'gunner' ? 2.3 : v.type === 'soldier' ? 1.65 : v.type === 'moto' ? 1.5 : 2.6;
+  const base = _v4.copy(v.pos); base.y += v.type === 'ship' ? 10 : v.type === 'plane' ? 2.5 : v.type === 'gunner' ? 2.3 : v.type === 'soldier' ? 1.65 : v.type === 'moto' ? 1.5 : v.type === 'drone' ? 0.7 : 2.6;
   const soldier = v.type === 'soldier';
   if (soldier) { base.x -= Math.cos(camYaw) * 0.55; base.z += Math.sin(camYaw) * 0.55; }   // over the right shoulder
   const cp = _v3.copy(base).addScaledVector(d, soldier ? -Math.max(2.2, Math.min(4.2, camDist * 0.3)) : -camDist);
@@ -5588,7 +5589,13 @@ function drawHud(now, dt) {
   if (!inGame) return;
   if (mode === 'cmd') return drawCmdHud(c, w, h, now);
   const v = myVehicle(); if (!v || !v.alive) return;
-  if (v.type === 'drone') {
+  if (v.type === 'drone' && MAP_ID === 'mars') {
+    // chase view: a ring where the nose points, and the flight numbers
+    const pn = project(_v1.copy(v.pos).addScaledVector(fwd(v.h, v.p, _v2), 120));
+    if (pn) ring(c, pn[0], pn[1], 10, '#f3f1e8', 1.8);
+    c.font = '700 12px monospace'; c.fillStyle = '#f3f1e8'; c.textAlign = 'left';
+    c.fillText('SPD ' + Math.round(v.speed * 3.6) + ' km/h · ALT ' + Math.round(v.pos.y - Math.max(0, H(v.pos.x, v.pos.z))) + ' m · BAT ' + Math.max(0, Math.ceil(v.bat)) + 's', 24, 96);
+  } else if (v.type === 'drone') {
     // FPV goggles: OSD text, crosshair, scan lines
     c.strokeStyle = 'rgba(255,255,255,.85)'; c.lineWidth = 2; c.beginPath(); c.moveTo(w / 2 - 22, h / 2); c.lineTo(w / 2 - 7, h / 2); c.moveTo(w / 2 + 7, h / 2); c.lineTo(w / 2 + 22, h / 2); c.moveTo(w / 2, h / 2 + 7); c.lineTo(w / 2, h / 2 + 18); c.stroke();
     c.fillStyle = 'rgba(0,0,0,.07)'; for (let y = (now / 30) % 4; y < h; y += 4) c.fillRect(0, y, w, 1);
