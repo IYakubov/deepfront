@@ -22,17 +22,22 @@ const RWY = { x0: 1030, x1: 1480, z: -250, w: 30 };   // |x| range, mirrored per
 const afZ = (team, z) => ((MAP_ID === 'ice' || MAP_ID === 'storm') && team === 1 ? 120 - z : z);
 const rwyZ = team => afZ(team, RWY.z);
 const sideTeam = x => (x < 0 ? 0 : 1);
+// E-shaped aircraft apron beside each runway: a spine parallel to the runway and three arms running up to it.
+// u = distance from the runway centre line, negative on the apron side (mirrored with the airfield)
+const APRON = { x0: 1035, x1: 1190, u0: -128, u1: -30, spine: [-128, -116], arms: [[1170, 22], [1110, 42], [1050, 22]] };
+const apronU = (x, z) => { const t = sideTeam(x); return (z - rwyZ(t)) * (afZ(t, 0) !== 0 ? -1 : 1); };
+const apronFlat = (x, z) => { const ax = Math.abs(x), u = apronU(x, z); return 1 - smooth(10, 60, Math.max(APRON.x0 - ax, ax - APRON.x1, APRON.u0 - u, u - APRON.u1, 0)); };
 const PORT = [{ x: -1200, z: 520 }, { x: 1200, z: 520 }];
 const SAMS = [[-1010, -110], [-1300, 330], [-1450, -60]];   // team 0, team 1 mirrored
 const HP = { tank: 120, jeep: 50, plane: 70, ship: 260, gunner: 40, icbm: 90, drone: 8, soldier: 30, moto: 35 };
 const HANGAR = { x: -1195, z: -75, hx: 18, hz: 15 };   // repair hangar of team 0; team 1 mirrored in x
-const ASSET_V = '11';                                  // bump when models change (they are cached by the browser)
+const ASSET_V = '12';                                  // bump when models change (they are cached by the browser)
 const TYPE_NAME = { tank: 'Танк', jeep: 'Джип', plane: 'Самолёт', ship: 'Корабль', gunner: 'Пулемётчик', icbm: 'SS-27', drone: 'FPV-дрон', soldier: 'Солдат', moto: 'Мотоцикл' };
 const TYPE_ICON = { tank: '▣', jeep: '◆', plane: '✈', ship: '⛴', gunner: '☗', icbm: '⇪', drone: '✣', soldier: '✚', moto: '⚙' };
 const TEAM_COL = [0x6f7d40, 0x3f6283];
 const TEAM_CSS = ['#a9b86a', '#7fa6c9'];
 // collision / hit boxes in local space [hx, y0, y1, hz]
-const HITBOX = { tank: [1.7, 0, 2.7, 3.7], jeep: [1.35, 0.2, 2.6, 2.3], plane: [6.6, -1.2, 2.6, 9.5], ship: [3.2, -2, 10, 24], gunner: [1.7, 0, 2.2, 1.7], icbm: [2.05, 0, 4.3, 11], drone: [0.7, -0.35, 0.5, 0.7], soldier: [0.42, 0, 1.85, 0.42], moto: [1.05, 0, 1.7, 1.6], harley: [0.55, 0, 1.75, 1.2], l9: [1.0, 0.15, 2.3, 2.6] };
+const HITBOX = { tank: [1.7, 0, 2.7, 3.7], jeep: [1.35, 0.2, 2.6, 2.3], plane: [6.6, -1.2, 2.6, 9.5], ship: [3.2, -2, 10, 24], gunner: [1.7, 0, 2.2, 1.7], icbm: [2.05, 0, 4.3, 11], drone: [0.7, -0.35, 0.5, 0.7], soldier: [0.42, 0, 1.85, 0.42], moto: [1.05, 0, 1.7, 1.6], harley: [0.55, 0, 1.75, 1.2], b2: [17.5, -0.8, 2.2, 7.2], l9: [1.0, 0.15, 2.3, 2.6] };
 // damage per weapon against each vehicle type
 const DMG = {
   shell: { tank: 30, jeep: 50, plane: 45, ship: 24, gunner: 40, soldier: 60, moto: 45 },
@@ -45,6 +50,7 @@ const DMG = {
   bomb: { tank: 85, jeep: 90, plane: 90, ship: 90, gunner: 90, soldier: 90, moto: 90 },
   ak: { tank: 0, jeep: 2, plane: 3, ship: 0, gunner: 4, icbm: 1, drone: 8, soldier: 9, moto: 2 },
   sg: { tank: 10, jeep: 35, plane: 10, ship: 10, gunner: 35, icbm: 10, drone: 90, soldier: 90, moto: 35 },   // the Harley's pump shotgun
+  b2bomb: { tank: 30, jeep: 50, plane: 60, ship: 26, gunner: 40, soldier: 90, moto: 50, drone: 90, icbm: 30 },   // one Mk-82 of the B-2's stick of 16
   crush: { tank: 0, jeep: 0, plane: 0, ship: 0, gunner: 0, soldier: 90, moto: 0 },
 };
 
@@ -224,7 +230,7 @@ const audio = (() => {
   // recorded engine loop for ground vehicles: [pitch at idle, pitch flat out, volume]
   const ENG_S = { tank: [0.55, 0.95, 1.0], jeep: [0.8, 1.45, 0.8], moto: [1.1, 1.9, 0.7] };
   let engSrc = null, engSG = null;
-  const ENG = { tank: [32, 60, 260, 520], drone: [55, 140, 400, 1300], jeep: [55, 140, 400, 1300], plane: [70, 190, 700, 2600], ship: [24, 34, 160, 300] };
+  const ENG = { tank: [32, 60, 260, 520], drone: [55, 140, 400, 1300], jeep: [55, 140, 400, 1300], plane: [70, 190, 700, 2600], b2: [34, 78, 220, 820], ship: [24, 34, 160, 300] };
   function engine(kind, load, speed) {
     if (!ctx) return;
     const t = ctx.currentTime, on = muted ? 0 : 1, e = ENG[kind] || ENG.tank;
@@ -642,6 +648,7 @@ function iceGrid() {
     let flat = 0;
     for (const b of BASES) flat = Math.max(flat, 1 - smooth(BASE_R + 50, BASE_R + 190, Math.hypot(x - b.x, z - b.z)));
     if (ax > RWY.x0 - 60 && ax < RWY.x1 + 60) flat = Math.max(flat, 1 - smooth(RWY.w + 50, RWY.w + 120, Math.abs(z - (x < 0 ? RWY.z : 120 - RWY.z))));    // runway + hangars
+    if (ax > APRON.x0 - 70 && ax < APRON.x1 + 70) flat = Math.max(flat, apronFlat(x, z));     // the E-shaped apron
     h = lerp(h, BASE_Y, flat);
     if (flat > 0.3) dc = Math.max(dc, 70 * flat);      // the runways never run into the sea
     // coast and sea
@@ -713,6 +720,7 @@ function buildWorld(seed) {
     for (const b of BASES) flat = Math.max(flat, 1 - smooth(BASE_R + 50, BASE_R + 190, Math.hypot(x - b.x, z - b.z)));
     const ax = Math.abs(x);
     if (ax > RWY.x0 - 60 && ax < RWY.x1 + 60) flat = Math.max(flat, 1 - smooth(RWY.w, RWY.w + 70, Math.abs(z - RWY.z)));
+    if (ax > APRON.x0 - 70 && ax < APRON.x1 + 70) flat = Math.max(flat, apronFlat(x, z));
     h = lerp(h, BASE_Y, flat);
     // mountains along the north edge and the sides
     if (z < -MAP_Z + 220) h += Math.min(240, (-MAP_Z + 220 - z) * 1.1) + (n2(x * 0.01, z * 0.01) - .5) * 40 * smooth(-MAP_Z + 220, -MAP_Z, z);
@@ -865,6 +873,19 @@ function buildWorld(seed) {
     const rl = RWY.x1 - RWY.x0 + 40;
     const rw = new THREE.Mesh(new THREE.PlaneGeometry(RWY.w * 2, rl), new THREE.MeshStandardMaterial({ map: rwTex, roughness: .95, polygonOffset: true, polygonOffsetFactor: -2 }));
     rw.rotation.set(-Math.PI / 2, 0, Math.PI / 2); rw.position.set(teamX(team, -(RWY.x0 + RWY.x1) / 2), BASE_Y + 0.05, rwyZ(team)); rw.receiveShadow = true; group.add(rw);
+    // E-shaped apron: the spine and three arms up to the runway, each with a yellow centre line and a stop bar
+    { const mA = new THREE.MeshStandardMaterial({ color: 0x5f6264, roughness: .95, polygonOffset: true, polygonOffsetFactor: -2 });
+      const mY = new THREE.MeshBasicMaterial({ color: 0xd9b02a, polygonOffset: true, polygonOffsetFactor: -3 });
+      const slab = (xc, u0, u1, w, m, y) => { const p = new THREE.Mesh(new THREE.PlaneGeometry(w, u1 - u0), m); p.rotation.x = -Math.PI / 2; p.position.set(teamX(team, -xc), BASE_Y + y, afZ(team, RWY.z + (u0 + u1) / 2)); p.receiveShadow = true; group.add(p); };
+      const xs = APRON.arms.map(a => a[0]), xa = Math.min(...xs) - 11, xb = Math.max(...xs) + 11;
+      // spine (a plane along x: width = length along x)
+      { const p = new THREE.Mesh(new THREE.PlaneGeometry(xb - xa, APRON.spine[1] - APRON.spine[0]), mA); p.rotation.x = -Math.PI / 2; p.position.set(teamX(team, -(xa + xb) / 2), BASE_Y + 0.045, afZ(team, RWY.z + (APRON.spine[0] + APRON.spine[1]) / 2)); p.receiveShadow = true; group.add(p); }
+      for (const [xc, w] of APRON.arms) {
+        slab(xc, APRON.spine[0], -RWY.w, w, mA, 0.04);
+        slab(xc, APRON.spine[0] + 6, -RWY.w, 0.35, mY, 0.06);                  // centre line
+        slab(xc, -82, -80.8, w - 4, mY, 0.06);                                  // stop bar at the nose of the parked aircraft
+      }
+    }
     // taxiway to the base
     const tw = new THREE.Mesh(new THREE.PlaneGeometry(18, 200), new THREE.MeshStandardMaterial({ color: 0x55585a, roughness: .95, polygonOffset: true, polygonOffsetFactor: -2 }));
     tw.rotation.x = -Math.PI / 2; tw.position.set(bx - sx * 60, BASE_Y + 0.04, afZ(team, -130)); tw.receiveShadow = true; group.add(tw);
@@ -994,7 +1015,7 @@ function buildWorld(seed) {
     if (ICEMAP && (Math.abs(H(x + 6, z) - y) > 5 || Math.abs(H(x, z + 6) - y) > 5 || nearIceRoad(x, z, 12))) continue;
     if (BASES.some(b => Math.hypot(x - b.x, z - b.z) < BASE_R + 90)) continue;
     if (Math.abs(x) < 1020 && Math.abs(z - roadZ(x)) < 11) continue;
-    if (Math.abs(x) > RWY.x0 - 80 && Math.abs(z - rwyZ(sideTeam(x))) < 110) continue;
+    if (Math.abs(x) > RWY.x0 - 80 && Math.abs(z - rwyZ(sideTeam(x))) < 150) continue;
     if (boxes.some(b => Math.abs(b.x - x) < b.hx + 4 && Math.abs(b.z - z) < b.hz + 4) || inPad(x, z, 12)) continue;
     trees.push({ x, y, z, s: 0.8 + rand() * 0.8, r: rand() * TAU });
   }
@@ -1896,7 +1917,7 @@ function whenModels(fn) { if (modelsDone) fn(); else modelWaiters.push(fn); }
 {
   const L = new GLTFLoader(); L.setMeshoptDecoder(MeshoptDecoder);
   const names = ['tank', 'jet', 'ship', 'jeep', 'drone', 'soldier', 'tree2', 'tank_lo', 'jet_lo', 'ship_lo', 'jeep_lo', 'drone_lo',
-    'country', 'country_lo', 'abandoned', 'abandoned_lo', 'moto', 'moto_lo', 'l9', 'l9_lo', 'harley', 'harley_lo', 'shotgun'];
+    'country', 'country_lo', 'abandoned', 'abandoned_lo', 'moto', 'moto_lo', 'l9', 'l9_lo', 'harley', 'harley_lo', 'shotgun', 'b2', 'b2_lo', 'b2bomb'];
   let left = names.length;
   const prog = Object.fromEntries(names.map(n => [n, 0]));
   const showProg = () => { const k = Object.values(prog).reduce((a, b) => a + b, 0) / names.length; loadingUI(k * 0.9, 'ЗАГРУЗКА ' + Math.round(k * 90) + '%'); };
@@ -2264,7 +2285,7 @@ attribute vec2 aTrk; uniform float uTrkOff; uniform float uTrkLen; uniform vec2 
 function dressVis(type, vis, color) {
   if (!modelsDone || vis.model) return;
   const key = vis.skin && DRESS[vis.skin] && MODELS[vis.skin] ? vis.skin : type;
-  const name = { tank: 'tank', plane: 'jet', ship: 'ship', jeep: 'jeep', icbm: 'topol', drone: 'drone', gunner: 'soldier', soldier: 'soldier', moto: 'moto', l9: 'l9', harley: 'harley' }[key];
+  const name = { tank: 'tank', plane: 'jet', ship: 'ship', jeep: 'jeep', icbm: 'topol', drone: 'drone', gunner: 'soldier', soldier: 'soldier', moto: 'moto', l9: 'l9', harley: 'harley', b2: 'b2' }[key];
   if (!MODELS[name]) return;
   atOrigin(vis.g, () => DRESS[key](vis, color));
   vis.model = true;
@@ -2670,6 +2691,57 @@ function animHarley(v, dt, rel) {
   if (H.legL) slerpQ(H.legL, H.seat, H.down, v.footK);
   H.lean.rotation.z = -0.09 * v.footK;
 }
+// ═══════════ B-2 SPIRIT: stealth bomber (a plane with skin 'b2') ═══════════
+// the real aircraft carries up to 80 Mk-82 500-lb bombs; here they go in sticks of 16 (a carpet along the track)
+const B2 = {
+  S: 3.1,                   // model units → metres: about a 36 m span (the real one is 52 m — kept smaller for the runway)
+  BOMBS: 80, STICK: 16, GAP: 0.07,
+  LOAD_T: 45,               // seconds parked at home to reload all 80
+  TAKEOFF: 62, THRUST: 11, VMIN: 45, VCRUISE: 50, VBOOST: 80, TURN: 0.55,
+};
+const isB2 = v => !!v && v.skin === 'b2';
+DRESS.b2 = function (v, col) {
+  const g = v.g;
+  const holder = fitModel('b2', { len: 4.66 * B2.S, rotY: Math.PI, y: -1.9 }), lo = fitLike(holder, 'b2_lo');
+  if (!holder) return;
+  hideProc(g, [v.flame, v.core]);
+  g.add(holder); g.updateMatrixWorld(true); v.mats = ownMats(holder, col, 0.1);
+  // landing gear: everything under the belly; folded away in the air
+  const body = []; holder.traverse(o => { if (o.isMesh) body.push(o); });
+  const gearParts = [];
+  for (const m of body) { const parts = splitMesh(m, p => p.y < -0.8 ? 'gear' : 'body'); if (parts.gear) gearParts.push(parts.gear); }
+  const gear = new THREE.Group(); g.add(gear); for (const p of gearParts) gear.attach(p);
+  v.gear = gear;
+  // no afterburner on a B-2, and the jet's procedural bombs / rockets stay hidden
+  v.flame.visible = v.core.visible = false; v.noFlame = true;
+  v.bombs.forEach(b => b.traverse(o => { if (o.isMesh) o.visible = false; }));
+  v.missiles.forEach(b => b.traverse(o => { if (o.isMesh) o.visible = false; }));
+  for (const [i, gun] of v.guns.entries()) gun.position.set(i ? -1.6 : 1.6, -1.2, 0.5);   // the bomb bay, left and right
+  mergeStatic(holder); mergeStatic(gear);
+  addLod(v, g, [holder], lo, col, 0.1);
+};
+// the falling bombs use the bomb from the same model
+whenModels(() => {
+  const src = MODELS.b2bomb; if (!src) return;
+  let mesh = null; src.updateMatrixWorld(true); src.traverse(o => { if (o.isMesh && !mesh) mesh = o; });
+  if (!mesh) return;
+  const geo = mesh.geometry.clone().applyMatrix4(mesh.matrixWorld);
+  geo.computeBoundingBox(); const c = geo.boundingBox.getCenter(new THREE.Vector3());
+  geo.translate(-c.x, -c.y, -c.z); geo.scale(B2.S, B2.S, B2.S); geo.rotateY(Math.PI);     // nose along +z (shots look along their velocity)
+  SPEC.b2bomb.geo = geo; SPEC.b2bomb.mat = mesh.material;
+});
+// a stick: 16 bombs a few metres apart, alternating left and right bay
+function b2Stick(v, dt) {
+  if (!v.stickN) return;
+  v.stickT -= dt;
+  while (v.stickN > 0 && v.stickT <= 0) {
+    v.stickT += B2.GAP; v.stickN--; v.bombs--;
+    v.vis.g.updateMatrixWorld(true);
+    const o = v.vis.guns[v.stickN % 2].getWorldPosition(new THREE.Vector3());
+    fireShot('b2bomb', o, new THREE.Vector3(0, -1, 0), { inherit: fwd(v.h, v.p, new THREE.Vector3()).multiplyScalar(v.speed) });
+    if (v.bombs <= 0) { v.stickN = 0; break; }
+  }
+}
 // ═══════════ TREES: the two tree models, mixed at random ═══════════
 // near the camera: the full models, instanced per 250 m cell; further out: a cut-out picture of the same tree
 // on two crossed quads (rendered once from the model), so thousands of trees stay cheap
@@ -3056,7 +3128,7 @@ function resetVehicle(v, d) {
   v.pos.set(sp.x, spawnY(v.type, sp.x, sp.z), sp.z); v.tpos.copy(v.pos);
   v.h = v.th = sp.yaw; v.p = v.r = v.tp = v.tr = 0; v.speed = v.tspeed = 0;
   v.aimYaw = sp.yaw; v.aimPitch = 0; v.f1 = 0; v.f2 = 0; v.dead = null;
-  v.air = false; v.thr = 0; v.tel = 1; v.rudder = 0; v.crashSent = false; v.bombs = 3; v.rk = 16; v.loadT = 0; v.bat = 100; v.erect = 0; v.tmode = false; v.mload = 0; v.icbms = 2; v.altPrev = false;
+  v.air = false; v.thr = 0; v.tel = 1; v.rudder = 0; v.crashSent = false; v.bombs = d.skin === 'b2' ? B2.BOMBS : 3; v.rk = d.skin === 'b2' ? 0 : 16; v.stickN = 0; v.loadT = 0; v.bat = 100; v.erect = 0; v.tmode = false; v.mload = 0; v.icbms = 2; v.altPrev = false;
   v.tgt = { x: BASES[1 - v.team].x, z: BASES[1 - v.team].z }; v.tzoom = 500;
   v.alive = true; v.hp = d.max || v.max;
   v.vis.g.visible = true;
@@ -3142,7 +3214,7 @@ function updateVis(v, dt) {
     if (v.vis.canopy) v.vis.canopy.rotation.x = v.air || Math.abs(v.speed) > 6 ? 0.42 : 0;
     const k = v.air ? 0.4 + v.f2 * 0.8 : v.f2 * 0.5;
     v.vis.flame.scale.set(1, 0.3 + k, 1); v.vis.core.scale.set(1, 0.3 + k, 1);
-    v.vis.flame.visible = v.vis.core.visible = v.alive && !v.dead && (v.f2 > 0.05 || v.air);
+    v.vis.flame.visible = v.vis.core.visible = !v.vis.noFlame && v.alive && !v.dead && (v.f2 > 0.05 || v.air);
   } else if (v.type === 'ship') {
     for (let i = 0; i < 3; i++) {
       const T = TURRETS[i];
@@ -3385,6 +3457,7 @@ const SPEC = {
   cannon: { speed: 900, grav: 0.2, life: 1.4, geo: bulletGeo, mat: tracerMat, len: 7 },
   icbm: { speed: 0, grav: 0, life: 60, geo: icbmGeo, mat: icbmMat, boom: 6, trail: true },
   bomb: { speed: 0, grav: 1.6, life: 25, geo: bombGeo, mat: bombMat, boom: 2.4, splash: 18 },
+  b2bomb: { speed: 0, grav: 1.6, life: 25, geo: bombGeo, mat: bombMat, boom: 1.6, splash: 11 },
   rocket: { speed: 230, grav: 0, life: 8, geo: rocketGeo, mat: rocketMat, boom: 1.0, splash: 9, trail: true },
   navrocket: { speed: 170, grav: 0, life: 10, geo: rocketGeo, mat: rocketMat, boom: 1.2, splash: 9, trail: true },
 };
@@ -3415,7 +3488,7 @@ function impact(s, pt, kind, v) {
   if (kind === 'water') particles.splash(pt, sp.boom ? 1.4 : 0.4);
   else if (kind === 'veh' && !sp.boom) particles.spark(pt);
   else if (!sp.boom) particles.dirt(pt);
-  if (sp.boom) { particles.explosion(pt, sp.boom); audio.boom(pt, sp.boom * 0.8); if (s.k === 'bomb') shake = Math.max(shake, Math.max(0, 1 - pt.distanceTo(camera.position) / 300)); }
+  if (sp.boom) { particles.explosion(pt, sp.boom); audio.boom(pt, sp.boom * 0.8); if (s.k === 'bomb' || s.k === 'b2bomb') shake = Math.max(shake, Math.max(0, 1 - pt.distanceTo(camera.position) / 300)); }
   else if (kind === 'veh') audio.at('ricochet', pt, 0.35, 1.2, 300);
   if (!s.mine) return;
   const myTeam = teamOfVid(s.ownerVid);
@@ -3547,7 +3620,7 @@ const samGeo = new THREE.CylinderGeometry(0.25, 0.25, 3.2, 6); samGeo.rotateX(Ma
 function updateSamSites(dt, now) {
   if (!world) return;
   const me_ = myVehicle();
-  const target = me_ && me_.type === 'plane' && me_.air && me_.alive ? me_ : null;
+  const target = me_ && me_.type === 'plane' && me_.air && me_.alive && !isB2(me_) ? me_ : null;   // the B-2 is invisible to ПВО radar
   let lvl = 0;
   const masked = target && terrainMasked(target);
   samHidden = !!masked && world.samSites.some(s => s.team !== target.team && s.top.distanceTo(target.pos) < SAM_RANGE);
@@ -3901,12 +3974,12 @@ function drivePlane(v, dt, frozen) {
     if (keys.KeyS || keys.ArrowDown) v.thr = Math.max(0, v.thr - 0.6 * dt);
   }
   v.f2 = v.thr;
-  const TAKEOFF = 55;
+  const b2 = isB2(v), TAKEOFF = b2 ? B2.TAKEOFF : 55;
   if (!v.air) {
     // on wheels: taxi, take-off roll
     const steer = chatOpen ? 0 : (keys.KeyA || keys.ArrowLeft ? 1 : 0) - (keys.KeyD || keys.ArrowRight ? 1 : 0);
     const braking = (keys.KeyS || keys.ArrowDown) && v.thr <= 0.01;
-    v.speed += (v.thr * 16 - v.speed * 0.04 - (braking ? 14 : 0.8) * Math.sign(v.speed)) * dt;
+    v.speed += (v.thr * (b2 ? B2.THRUST : 16) - v.speed * 0.04 - (braking ? 14 : 0.8) * Math.sign(v.speed)) * dt;
     if (Math.abs(v.speed) < 0.3 && v.thr < 0.01) v.speed = 0;
     v.speed = Math.max(-3, v.speed);
     if (!frozen) {
@@ -3928,17 +4001,18 @@ function drivePlane(v, dt, frozen) {
   } else {
     // flying: chase the mouse-aim direction
     const desH = camYaw, desP = Math.max(-1.2, Math.min(1.2, camPitch));
-    const turnK = Math.max(0.35, Math.min(1, (v.speed - 40) / 70));
+    const turnK = Math.max(0.35, Math.min(1, (v.speed - 40) / 70)) * (b2 ? B2.TURN : 1);   // the heavy bomber turns slowly
     const dh = wrap(desH - v.h), dp = desP - v.p;
     let yawRate = Math.max(-1.1 * turnK, Math.min(1.1 * turnK, dh * 2.2));
     const rud = chatOpen ? 0 : (keys.KeyA || keys.ArrowLeft ? 1 : 0) - (keys.KeyD || keys.ArrowRight ? 1 : 0);
     yawRate += rud * 0.4;
     let pitchRate = Math.max(-1 * turnK, Math.min(1 * turnK, dp * 2.2));
-    if (v.speed < 48) { pitchRate -= (48 - v.speed) / 10 * 0.8; warnText = 'СВАЛИВАНИЕ — ТЯГУ!'; }
+    const vmin = b2 ? B2.VMIN : 48;
+    if (v.speed < vmin) { pitchRate -= (vmin - v.speed) / 10 * 0.8; warnText = 'СВАЛИВАНИЕ — ТЯГУ!'; }
     if (!frozen) { v.h = wrap(v.h + yawRate * dt); v.p = Math.max(-1.25, Math.min(1.25, v.p + pitchRate * dt)); }
     const wantBank = Math.max(-1.2, Math.min(1.2, -yawRate * 1.1 - rud * 0.25));
     v.r += (wantBank - v.r) * (1 - Math.exp(-4 * dt));
-    const target = 55 + v.thr * 105;
+    const target = b2 ? B2.VCRUISE + v.thr * B2.VBOOST : 55 + v.thr * 105;
     v.speed += (target - v.speed) * 0.45 * dt - 28 * Math.sin(v.p) * dt;
     v.speed = Math.max(30, Math.min(230, v.speed));
     if (!frozen) v.pos.addScaledVector(fwd(v.h, v.p, _v1), v.speed * dt);
@@ -3962,9 +4036,10 @@ function drivePlane(v, dt, frozen) {
     }
   }
   v.f1 = v.air ? 1 : 0;
-  // guns: along the nose
+  // guns: along the nose (the B-2 has none: a click drops a stick of bombs instead)
   reload2 = Math.max(0, reload2 - dt);
-  if (mouseFire && !chatOpen && !frozen) {
+  if (b2) { if (mouseFire && v.air && !chatOpen && !frozen) dropBomb(); b2Stick(v, dt); }
+  else if (mouseFire && !chatOpen && !frozen) {
     v.fireAcc += dt;
     while (v.fireAcc > 0.075) {
       v.fireAcc -= 0.075;
@@ -3978,7 +4053,7 @@ function drivePlane(v, dt, frozen) {
   } else v.fireAcc = Math.min(v.fireAcc, 0.075);
   // lock-on: keep an enemy inside the cone ahead for 1.5 s, then right-click / Q sends homing rockets
   let best = null, bs = Infinity;
-  if (v.air) {
+  if (v.air && !b2) {
     const nose = fwd(v.h, v.p, _v1);
     for (const o of vehicles.values()) {
       if (!o.alive || o.team === v.team || o.dead || o.type === 'gunner') continue;   // a man at a machine gun is too small for the plane's lock
@@ -4000,7 +4075,7 @@ function drivePlane(v, dt, frozen) {
   const lockedOn = lockVid && lockT >= LOCK_TIME;
   lockBeep -= dt;
   if (lockVid && lockBeep <= 0 && v.rk > 0) { audio.tone(lockedOn ? 1250 : 760, lockedOn ? 0.12 : 0.05, 0.035); lockBeep = lockedOn ? 0.16 : 0.32; }
-  if (mouseAlt && reload2 <= 0 && v.rk > 0 && !chatOpen && !frozen) {
+  if (mouseAlt && reload2 <= 0 && v.rk > 0 && !b2 && !chatOpen && !frozen) {
     // one missile per press (hold to ripple them off), alternating left and right pylons
     reload2 = 0.4;
     v.vis.g.updateMatrixWorld(true);
@@ -4015,23 +4090,31 @@ function drivePlane(v, dt, frozen) {
   bombCd = Math.max(0, bombCd - dt);
   // rearm and repair: parked at the home base for 30 s (the server adds the hit points second by second)
   const hurt = v.hp < v.max;
-  if (!v.air && Math.abs(v.speed) < 1 && inOwnBase(v) && (v.bombs < 3 || v.rk < 16 || flares < 3 || hurt)) {
+  const fullB = b2 ? B2.BOMBS : 3, fullR = b2 ? 0 : 16, loadT = b2 ? B2.LOAD_T : 30;
+  if (!v.air && Math.abs(v.speed) < 1 && inOwnBase(v) && (v.bombs < fullB || v.rk < fullR || flares < 3 || hurt)) {
     v.loadT += dt;
     v.fixT = (v.fixT || 0) - dt;
     if (hurt && v.fixT <= 0) { v.fixT = 1; socket.emit('pfix'); }
     const blocked = hurt && v.repairBlock > performance.now();
-    warnText = (hurt ? (blocked ? 'РЕМОНТ ОСТАНОВЛЕН (ОБСТРЕЛ) · ' : 'РЕМОНТ ' + Math.round(v.hp / v.max * 100) + '% · ') : '') + 'ЗАГРУЗКА БОМБ И РАКЕТ: ' + Math.ceil(30 - v.loadT) + ' с';
-    if (v.loadT >= 30) { v.bombs = 3; v.rk = 16; flares = 3; v.loadT = 0; audio.play('energy', 0.7); centerMsg(hurt ? 'ВООРУЖЕНИЕ ЗАГРУЖЕНО' : 'САМОЛЁТ ГОТОВ', '3 бомбы · 16 ракет' + (hurt ? '' : ' · прочность 100%'), 1800, '#9bff7a'); }
+    warnText = (hurt ? (blocked ? 'РЕМОНТ ОСТАНОВЛЕН (ОБСТРЕЛ) · ' : 'РЕМОНТ ' + Math.round(v.hp / v.max * 100) + '% · ') : '') + (b2 ? 'ЗАГРУЗКА 80 БОМБ: ' : 'ЗАГРУЗКА БОМБ И РАКЕТ: ') + Math.ceil(loadT - v.loadT) + ' с';
+    if (v.loadT >= loadT) { v.bombs = fullB; v.rk = fullR; flares = 3; v.loadT = 0; audio.play('energy', 0.7); centerMsg(hurt ? 'ВООРУЖЕНИЕ ЗАГРУЖЕНО' : 'САМОЛЁТ ГОТОВ', (b2 ? '80 бомб Mk-82 · 5 серий по 16' : '3 бомбы · 16 ракет') + (hurt ? '' : ' · прочность 100%'), 1800, '#9bff7a'); }
   } else v.loadT = 0;
   flareCd = Math.max(0, flareCd - dt);
-  audio.engine('plane', v.thr, Math.min(1, Math.abs(v.speed) / 160));
+  audio.engine(b2 ? 'b2' : 'plane', v.thr, Math.min(1, Math.abs(v.speed) / (b2 ? 130 : 160)));
 }
 function dropBomb() {
   const v = myVehicle();
   if (!v || v.type !== 'plane' || !v.alive || chatOpen) return;
   if (!v.air) { logMsg('Бомбы сбрасываются только в воздухе'); return; }
-  if (v.bombs <= 0) { logMsg('Бомб нет — сядьте на своей базе и подождите 30 с'); audio.tone(220, 0.1, 0.05); return; }
+  if (v.bombs <= 0) { if (bombCd <= 0) { bombCd = 1; logMsg('Бомб нет — сядьте на своей базе и подождите ' + (isB2(v) ? B2.LOAD_T : 30) + ' с'); audio.tone(220, 0.1, 0.05); } return; }
   if (bombCd > 0) return;
+  if (isB2(v)) {        // a whole stick: 16 bombs in a line along the track
+    if (v.stickN) return;
+    const n = Math.min(B2.STICK, v.bombs); v.stickN = n; v.stickT = 0; bombCd = 1.4;
+    audio.tone(300, 0.12, 0.05);
+    logMsg('Серия из ' + n + ' бомб · осталось ' + (v.bombs - n) + ' (' + Math.ceil((v.bombs - n) / B2.STICK) + ' серий)');
+    return;
+  }
   bombCd = 0.6; v.bombs--;
   const o = v.pos.clone(); o.y -= 1.6;
   fireShot('bomb', o, new THREE.Vector3(0, -1, 0), { inherit: fwd(v.h, v.p, new THREE.Vector3()).multiplyScalar(v.speed) });
@@ -4285,7 +4368,7 @@ function driveShip(v, dt, frozen) {
   let best = null, bs = Infinity;
   const cdir = camera.getWorldDirection(_v3);
   for (const o of vehicles.values()) {
-    if (!o.alive || o.dead || o.team === v.team) continue;
+    if (!o.alive || o.dead || o.team === v.team || isB2(o)) continue;   // the ship's air defence can't see the B-2
     const d0 = o.pos.distanceTo(v.pos); if (d0 > SHIP_LOCK_RANGE || d0 < 40) continue;
     const dx = o.pos.x - camera.position.x, dy = o.pos.y + 1.5 - camera.position.y, dz = o.pos.z - camera.position.z, d = Math.hypot(dx, dy, dz);
     const ang = Math.acos(Math.max(-1, Math.min(1, (dx * cdir.x + dy * cdir.y + dz * cdir.z) / d)));
@@ -5139,8 +5222,8 @@ function updateCmd(dt) {
   } else { tip.style.display = 'none'; canvas.style.cursor = cmdDrag ? 'grabbing' : 'default'; }
 }
 const myTeam = () => { const p = me(); return p ? p.team : 0; };
-const typeName = v => v.skin === 'l9' ? 'Li L9' : v.skin === 'harley' ? 'Харлей' : TYPE_NAME[v.type];
-const vName = v => v.skin === 'l9' ? 'Li L9' : v.skin === 'harley' ? 'Харлей' : TYPE_NAME[v.type] + ' ' + v.n;
+const typeName = v => v.skin === 'l9' ? 'Li L9' : v.skin === 'harley' ? 'Харлей' : v.skin === 'b2' ? 'B-2 Spirit' : TYPE_NAME[v.type];
+const vName = v => v.skin === 'l9' ? 'Li L9' : v.skin === 'harley' ? 'Харлей' : v.skin === 'b2' ? 'B-2 Spirit' : TYPE_NAME[v.type] + ' ' + v.n;
 // can I get in? (a motorcycle also has the gunner's seat in its sidecar)
 const seatFree = v => !v.driver || v.driver === myId || (v.type === 'moto' && v.skin !== 'harley' && (!v.gunner || v.gunner === myId));
 function requestEnter(vid) {
@@ -5165,7 +5248,7 @@ function takeControl(v, seat) {
   camTrans = 1; camTransAt = performance.now(); sniper = false;
   document.body.classList.remove('cmdv');
   $('cmdtip').style.display = 'none'; canvas.style.cursor = '';
-  centerMsg(vName(v).toUpperCase() + (mySeat ? ' · СТРЕЛОК' : ''), mySeat ? 'Мышь — прицел · клик — огонь · колесо вниз — выйти' : v.skin === 'l9' ? 'WASD — ехать · мышь и клик — пулемёт · P — автопилот (точка на карте)' : v.skin === 'harley' ? 'WASD — ехать · мышь — прицел · клик — дробовик (после выстрела — прокрутка)' : v.type === 'moto' ? 'WASD — ехать · мышь и клик — пулемёт · второй игрок может сесть стрелком' : v.type === 'plane' ? 'W — тяга · разгон и мышь вверх' : v.type === 'gunner' ? 'Мышь — прицел · клик — огонь · колесо вниз — выйти' : v.type === 'icbm' ? 'WASD — ехать · остановитесь и ПКМ — наведение ракеты' : v.type === 'drone' ? 'W — взлёт · летит за мышью · взрывается при ударе' : v.type === 'soldier' ? 'WASD — идти · Shift — бег · клик — огонь · ПКМ — прицел · R — перезарядка' : 'Колесо вниз — наверх, к выбору техники', 1500);
+  centerMsg(vName(v).toUpperCase() + (mySeat ? ' · СТРЕЛОК' : ''), mySeat ? 'Мышь — прицел · клик — огонь · колесо вниз — выйти' : v.skin === 'l9' ? 'WASD — ехать · мышь и клик — пулемёт · P — автопилот (точка на карте)' : v.skin === 'harley' ? 'WASD — ехать · мышь — прицел · клик — дробовик (после выстрела — прокрутка)' : v.type === 'moto' ? 'WASD — ехать · мышь и клик — пулемёт · второй игрок может сесть стрелком' : v.skin === 'b2' ? 'W — тяга · разгон и мышь вверх · клик / B — серия из 16 бомб · ПВО его не видит' : v.type === 'plane' ? 'W — тяга · разгон и мышь вверх' : v.type === 'gunner' ? 'Мышь — прицел · клик — огонь · колесо вниз — выйти' : v.type === 'icbm' ? 'WASD — ехать · остановитесь и ПКМ — наведение ракеты' : v.type === 'drone' ? 'W — взлёт · летит за мышью · взрывается при ударе' : v.type === 'soldier' ? 'WASD — идти · Shift — бег · клик — огонь · ПКМ — прицел · R — перезарядка' : 'Колесо вниз — наверх, к выбору техники', 1500);
   lockPointer();
 }
 function leaveVehicle(force) {
@@ -5341,7 +5424,7 @@ function drawHud(now, dt) {
     // bomb sight
     if (v.air && v.bombs > 0) {
       const pb = project(bombImpact(v, _v3));
-      if (pb) { c.strokeStyle = '#9bff7a'; c.lineWidth = 2; c.beginPath(); c.arc(pb[0], pb[1], 12, 0, TAU); c.moveTo(pb[0] - 18, pb[1]); c.lineTo(pb[0] + 18, pb[1]); c.moveTo(pb[0], pb[1] - 18); c.lineTo(pb[0], pb[1] + 18); c.stroke(); c.fillStyle = '#9bff7a'; c.font = '800 9px Unbounded'; c.textAlign = 'center'; c.fillText('БОМБА', pb[0], pb[1] + 30); }
+      if (pb) { c.strokeStyle = '#9bff7a'; c.lineWidth = 2; c.beginPath(); c.arc(pb[0], pb[1], 12, 0, TAU); c.moveTo(pb[0] - 18, pb[1]); c.lineTo(pb[0] + 18, pb[1]); c.moveTo(pb[0], pb[1] - 18); c.lineTo(pb[0], pb[1] + 18); c.stroke(); c.fillStyle = '#9bff7a'; c.font = '800 9px Unbounded'; c.textAlign = 'center'; c.fillText(isB2(v) ? 'СЕРИЯ ×' + Math.min(B2.STICK, v.bombs) + ' · ' + v.bombs : 'БОМБА', pb[0], pb[1] + 30); }
     }
   } else {
     c.fillStyle = 'rgba(255,255,255,.75)'; c.fillRect(w / 2 - 1.5, h / 2 - 1.5, 3, 3);
@@ -5476,7 +5559,7 @@ function updateSpotting(dt) {
       if (d < R) { e.seen = true; break; }
     }
   }
-  for (const s of world.samSites) if (s.team === team) for (const e of vehicles.values()) if (e.team !== team && e.alive && s.top.distanceTo(e.pos) < SAM_RANGE) e.seen = true;
+  for (const s of world.samSites) if (s.team === team) for (const e of vehicles.values()) if (e.team !== team && e.alive && !isB2(e) && s.top.distanceTo(e.pos) < SAM_RANGE) e.seen = true;
 }
 // enemies: only a jet's sensors show them (spotted by the team); everything else has to actually see them,
 // and an enemy's name and health appear only while it is under the crosshair
@@ -5528,6 +5611,7 @@ function updateBottom() {
   else if (v.skin === 'harley') { set(2, 'ПРИЦЕЛ', aimHit ? Math.round(aimHit.t) + ' м' : '—'); bar(3, 'ДРОБОВИК', reload > 0 ? 1 - reload / HARLEY.RELOAD : 1, reload > 0 ? '#e0b050' : '#9bdc6a'); bar(4, 'КОРПУС', k, '#9aa39a'); set(5, 'ЭКИПАЖ', 'ВЫ САМИ'); }
   else if (v.type === 'moto') { set(2, 'ПРИЦЕЛ', aimHit ? Math.round(aimHit.t) + ' м' : '—'); bar(3, 'ПУЛЕМЁТ', 1, '#9bdc6a'); bar(4, 'КОРПУС', k, '#9aa39a'); set(5, mySeat ? 'ВОДИТЕЛЬ' : 'СТРЕЛОК', mySeat ? (v.driver ? nameOf(v.driver) : '—') : (v.gunner && v.gunner !== myId ? nameOf(v.gunner) : 'ВЫ САМИ')); }
   else if (v.type === 'jeep') { set(2, 'ПРИЦЕЛ', aimHit ? Math.round(aimHit.t) + ' м' : '—'); bar(3, 'ПУЛЕМЁТ', 1, '#9bdc6a'); bar(4, 'КОРПУС', k, '#9aa39a'); set(5, 'КЛИК', 'ОГОНЬ'); }
+  else if (isB2(v)) { set(2, 'ВЫСОТА', Math.round(v.pos.y - Math.max(0, H(v.pos.x, v.pos.z))) + ' м'); bar(3, 'ТЯГА', v.thr, '#8fc3e8'); bar(4, 'БОМБЫ ' + v.bombs + ' / 80', v.bombs / B2.BOMBS, '#ffb03a'); set(5, 'СЕРИЙ · КЛИК / B', Math.ceil(v.bombs / B2.STICK) + ' / 5'); }
   else if (v.type === 'plane') { set(2, 'ВЫСОТА', Math.round(v.pos.y - Math.max(0, H(v.pos.x, v.pos.z))) + ' м'); bar(3, 'ТЯГА', v.thr, '#8fc3e8'); bar(4, 'РАКЕТЫ ' + v.rk + ' · ПКМ', v.rk / 16, '#ffb03a'); set(5, 'БОМБЫ · ПРОБЕЛ', v.bombs + ' / 3'); }
   else if (v.type === 'icbm') { set(2, 'РАКЕТЫ', v.icbms + ' / 2'); bar(3, 'ПОДЪЁМ', v.erect, '#ffb03a'); bar(4, 'ПЕРЕЗАРЯДКА', 1 - v.mload / 90, v.mload > 0 ? '#e3a53c' : '#9bdc6a'); set(5, 'ПКМ', v.tmode ? 'ОТМЕНА' : 'НАВЕДЕНИЕ'); }
   else if (v.type === 'drone') { set(2, 'БАТАРЕЯ', Math.max(0, Math.ceil(v.bat)) + ' с'); bar(3, 'ТЯГА', v.thr, '#8fc3e8'); bar(4, 'ЗАРЯД', v.bat / 100, '#9bdc6a'); set(5, 'УДАР', 'ВЗРЫВ'); }

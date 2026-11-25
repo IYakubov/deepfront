@@ -28,7 +28,7 @@ const HP = { tank: 120, jeep: 50, plane: 70, ship: 260, gunner: 40, icbm: 90, dr
 const MACHINES = 15;             // per team; machine-gun posts, drones and foot soldiers don't count
 const NOT_MACHINE = new Set(['gunner', 'drone', 'soldier']);
 const PFX = { soldier: 'a' };     // vid prefix (ship already uses 's')
-const SKIN_HP = { harley: 45 };   // the Harley survives one shotgun blast (a moto takes 35)
+const SKIN_HP = { harley: 45, b2: 130 };   // the Harley survives one shotgun blast (a moto takes 35)
 // repair hangar per base (team 0; team 1 mirrored in x): one machine at a time, 60 s, can be destroyed
 const HANGAR = { x: -1195, z: -75, hx: 18, hz: 15, hp: 120 };   // as tough as a tank
 const REPAIR_T = 60;
@@ -39,7 +39,9 @@ const LAYOUT = [
   ['tank', -1070, 5, Math.PI / 2], ['tank', -1070, 45, Math.PI / 2],
   ['jeep', -1170, 150, Math.PI / 2], ['jeep', -1150, 165, Math.PI / 2], ['jeep', -1130, 180, Math.PI / 2],
   ['jeep', -1110, 200, Math.PI / 2, 'l9'],              // Li Auto L9 with a roof machine gun
-  ['plane', -1430, -262, Math.PI / 2], ['plane', -1395, -238, Math.PI / 2],
+  // aircraft on the three arms of the E-shaped apron south of the runway, noses towards the runway
+  ['plane', -1170, -345, 0], ['plane', -1050, -345, 0],
+  ['plane', -1110, -345, 0, 'b2'],                      // B-2 Spirit: 80 bombs, invisible to ПВО
   ['ship', -1260, 560, 0.25], ['ship', -1150, 590, 0.25],
   ['drone', -1185, 14, Math.PI / 2], ['drone', -1185, 22, Math.PI / 2],
   ['moto', -1235, 75, Math.PI / 2], ['moto', -1235, 90, Math.PI / 2],
@@ -74,8 +76,10 @@ function makeVehicles(map) {
       if (map === 'storm' && type === 'ship') continue;
       const ck = skin || type;
       count[ck] = (count[ck] || 0) + 1;
-      const sp = team === 0 ? { x, z, yaw } : { x: -x, z: map === 'ice' || map === 'storm' ? iceBlueSpot(type, x, z) : z, yaw: -yaw };
-      vs.push({ vid: `${team}${skin === 'harley' ? 'h' : skin ? 'l' : PFX[type] || type[0]}${count[ck]}`, team, type, skin: skin || null, n: count[ck], hp: SKIN_HP[skin] || HP[type], max: SKIN_HP[skin] || HP[type], alive: true, driver: null, ammo: type === 'icbm' ? 2 : 0, spent: false, spawn: sp, st: null, respawnAt: 0, lastHitBy: null, lastHitAt: 0 });
+      const isle = map === 'ice' || map === 'storm';
+      // blue mirrors red in x; on the island maps its airfield is also mirrored in z (planes then face the other way)
+      const sp = team === 0 ? { x, z, yaw } : { x: -x, z: isle ? iceBlueSpot(type, x, z) : z, yaw: isle && type === 'plane' ? Math.PI + yaw : -yaw };
+      vs.push({ vid: `${team}${skin === 'harley' ? 'h' : skin === 'b2' ? 'b' : skin ? 'l' : PFX[type] || type[0]}${count[ck]}`, team, type, skin: skin || null, n: count[ck], hp: SKIN_HP[skin] || HP[type], max: SKIN_HP[skin] || HP[type], alive: true, driver: null, ammo: type === 'icbm' ? 2 : 0, spent: false, spawn: sp, st: null, respawnAt: 0, lastHitBy: null, lastHitAt: 0 });
     }
   }
   return vs;
