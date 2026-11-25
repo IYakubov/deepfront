@@ -4495,7 +4495,7 @@ function driveDrone(v, dt, frozen) {
     v.f1 = 0; v.speed = 0;
     warnText = 'W — ВЗЛЁТ';
     if (v.thr > 0.05 && !frozen) { v.air = true; v.pos.y += 0.8; v.h = camYaw; logMsg('FPV в воздухе: летит туда, куда смотрите · W/S — скорость'); }
-    audio.engine('drone', v.thr, 0);
+    if (MAP_ID === 'mars') audio.jet(0.08 + v.thr * 0.3); else audio.engine('drone', v.thr, 0);
     return;
   }
   v.bat -= dt;
@@ -4518,7 +4518,8 @@ function driveDrone(v, dt, frozen) {
     if (v.pos.y > 500) v.pos.y = 500;
   }
   v.f1 = 1; v.aimYaw = v.h; v.aimPitch = v.p;
-  audio.engine('drone', 0.5 + v.thr * 0.5, 0.4 + v.speed / 70);
+  if (MAP_ID === 'mars') audio.jet(0.25 + v.thr * 0.45 + Math.min(0.3, v.speed / 230));      // a little jet, not a propeller buzz
+  else audio.engine('drone', 0.5 + v.thr * 0.5, 0.4 + v.speed / 70);
 }
 function dropFlares() {
   const v = myVehicle();
