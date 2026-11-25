@@ -49,7 +49,7 @@ const LAYOUT = [
   ['gunner', -985, 40, Math.PI / 2], ['gunner', -1010, 215, Math.PI / 2], ['gunner', -1150, 405, 0],
 ];
 
-const MAPS = ['valley', 'ice', 'storm'];       // Долина, Ледяной остров, Ночной шторм (no ships)
+const MAPS = ['valley', 'ice', 'storm', 'mars'];       // Долина, Ледяной остров, Ночной шторм (no ships)
 const rooms = new Map();
 
 function newCode() {
@@ -73,7 +73,8 @@ function makeVehicles(map) {
   for (const team of [0, 1]) {
     const count = {};
     for (const [type, x, z, yaw, skin] of LAYOUT) {
-      if (map === 'storm' && type === 'ship') continue;
+      if ((map === 'storm' || map === 'mars') && type === 'ship') continue;
+      if (map === 'mars' && skin === 'b2') continue;          // no B-2 on Mars
       const ck = skin || type;
       count[ck] = (count[ck] || 0) + 1;
       const isle = map === 'ice' || map === 'storm';

@@ -31,7 +31,7 @@ const PORT = [{ x: -1200, z: 520 }, { x: 1200, z: 520 }];
 const SAMS = [[-1010, -110], [-1300, 330], [-1450, -60]];   // team 0, team 1 mirrored
 const HP = { tank: 120, jeep: 50, plane: 70, ship: 260, gunner: 40, icbm: 90, drone: 8, soldier: 30, moto: 35 };
 const HANGAR = { x: -1195, z: -75, hx: 18, hz: 15 };   // repair hangar of team 0; team 1 mirrored in x
-const ASSET_V = '12';                                  // bump when models change (they are cached by the browser)
+const ASSET_V = '13';                                  // bump when models change (they are cached by the browser)
 const TYPE_NAME = { tank: 'Танк', jeep: 'Джип', plane: 'Самолёт', ship: 'Корабль', gunner: 'Пулемётчик', icbm: 'SS-27', drone: 'FPV-дрон', soldier: 'Солдат', moto: 'Мотоцикл' };
 const TYPE_ICON = { tank: '▣', jeep: '◆', plane: '✈', ship: '⛴', gunner: '☗', icbm: '⇪', drone: '✣', soldier: '✚', moto: '⚙' };
 const TEAM_COL = [0x6f7d40, 0x3f6283];
@@ -524,7 +524,40 @@ const MAP_LIST = [
   { id: 'valley', name: 'Долина', desc: 'Холмы, городки и море на юге' },
   { id: 'ice', name: 'Ледяной остров', desc: 'Зима, горы в центре, ущелья для полётов под ПВО' },
   { id: 'storm', name: 'Ночной шторм', desc: 'Ночь, ливень и молнии; горный лабиринт; без кораблей' },
+  { id: 'mars', name: 'Марс', desc: 'Низкая гравитация — прыжки с холмов; космолёты и космо-дроны; без кораблей и B-2' },
 ];
+// ── Mars: the ground is a real HiRISE height model (baked to a 10 m grid, maps/mars_h.bin) ──
+const MARS = { h: null, GX: 411, GZ: 311, SX: 4100, SZ: 3100, ref: [0, 0] };
+fetch('maps/mars_h.bin?v=' + ASSET_V).then(r => r.arrayBuffer()).then(buf => {
+  const dv = new DataView(buf), mn = dv.getFloat32(0, true), mx = dv.getFloat32(4, true), n = MARS.GX * MARS.GZ, h = new Float32Array(n);
+  for (let j = 0; j < n; j++) h[j] = mn + dv.getUint16(8 + j * 2, true) / 65535 * (mx - mn);
+  MARS.h = h;
+  // each base sits at the local ground level of its own side: average around both bases
+  for (const t of [0, 1]) { let s = 0, c = 0; const b = BASES[t]; for (let dz = -250; dz <= 250; dz += 25) for (let dx = -250; dx <= 250; dx += 25) { s += marsRaw(b.x + dx, b.z - 150 + dz); c++; } MARS.ref[t] = s / c; }
+}).catch(e => console.warn('mars height map', e));
+function marsRaw(x, z) {
+  const gx = Math.max(0, Math.min(MARS.GX - 1.001, (x + MARS.SX / 2) / (MARS.SX / (MARS.GX - 1))));
+  const gz = Math.max(0, Math.min(MARS.GZ - 1.001, (z + MARS.SZ / 2) / (MARS.SZ / (MARS.GZ - 1))));
+  const i = gx | 0, k = gz | 0, fx = gx - i, fz = gz - k, W = MARS.GX, h = MARS.h, j = k * W + i;
+  return (h[j] * (1 - fx) + h[j + 1] * fx) * (1 - fz) + (h[j + W] * (1 - fx) + h[j + W + 1] * fx) * fz;
+}
+function marsH(x, z) {
+  if (!MARS.h) return BASE_Y;
+  // shifted so each base side sits at BASE_Y; the shift blends across the middle of the map
+  const ref = lerp(MARS.ref[0], MARS.ref[1], smooth(-900, 900, x));
+  let h = BASE_Y + (marsRaw(x, z) - ref);
+  const ax = Math.abs(x);
+  let flat = 0;
+  for (const b of BASES) flat = Math.max(flat, 1 - smooth(BASE_R + 40, BASE_R + 170, Math.hypot(x - b.x, z - b.z)));
+  if (ax > RWY.x0 - 60 && ax < RWY.x1 + 60) flat = Math.max(flat, 1 - smooth(RWY.w + 50, RWY.w + 120, Math.abs(z - RWY.z)));
+  if (ax > APRON.x0 - 70 && ax < APRON.x1 + 70) flat = Math.max(flat, apronFlat(x, z));
+  h = lerp(h, BASE_Y, flat);
+  // crater rims around the play area
+  const ez = Math.abs(z) - (MAP_Z - 130), ex = ax - (MAP_X - 120);
+  if (ez > 0) h += Math.min(220, ez * 1.3);
+  if (ex > 0) h += Math.min(220, ex * 1.3);
+  return Math.max(1.5, h);           // no water on Mars: crater floors stop above "sea level"
+}
 const ISLE = () => MAP_ID === 'ice' || MAP_ID === 'storm';      // the island maps (same outline and bases)
 let MAP_ID = 'valley';
 const mapName = id => (MAP_LIST.find(m => m.id === id) || MAP_LIST[0]).name;
@@ -683,11 +716,18 @@ function TOWN_PADS_INIT() {
 // switch the map: the world is rebuilt right after
 function applyMap(id) {
   MAP_ID = MAP_LIST.some(m => m.id === id) ? id : 'valley';
-  const ice = ISLE(), storm = MAP_ID === 'storm';
+  const ice = ISLE(), storm = MAP_ID === 'storm', mars = MAP_ID === 'mars';
   TOWN_PADS.length = 0;
-  for (const p of (ice ? ICE.towns : VALLEY_PADS)) TOWN_PADS.push(Object.assign({}, p));
-  coastZ = ice ? ICE.coastZ : VALLEY_COAST;
-  roadZ = ice ? () => 1e6 : VALLEY_ROAD;
+  if (!mars) for (const p of (ice ? ICE.towns : VALLEY_PADS)) TOWN_PADS.push(Object.assign({}, p));
+  coastZ = ice ? ICE.coastZ : mars ? () => 1e6 : VALLEY_COAST;
+  roadZ = ice || mars ? () => 1e6 : VALLEY_ROAD;
+  GRAV = mars ? 3.7 : 9.8;
+  if (mars) {      // butterscotch sky, dusty haze, a smaller and paler sun
+    SKY.set(0xc8a07a); scene.fog.color.copy(SKY); skyTop.set(0x7d5a44);
+    scene.fog.near = 500; scene.fog.far = 2900;
+    hemi.color.set(0xf2d6bb); hemi.groundColor.set(0x6a3a22); hemi.intensity = 1.25; sun.intensity = 1.15; sun.color.set(0xffe2c4);
+    return;
+  }
   const sky = new THREE.Color(storm ? 0x0c1117 : ice ? 0xb4bfc7 : 0xa3aaae);
   SKY.copy(sky); scene.fog.color.copy(sky); skyTop.set(storm ? 0x04060a : 0x868f97);
   scene.fog.near = storm ? 80 : ice ? 420 : 520; scene.fog.far = storm ? 820 : ice ? 2500 : 2700;
@@ -711,8 +751,9 @@ function buildWorld(seed) {
   const rand = mulberry32(seed);
   const n1 = makeNoise(mulberry32(777)), n2 = makeNoise(mulberry32(778));   // terrain is the same every match
   const fbm = (x, z) => { let s = 0, a = 1, f = 1; for (let i = 0; i < 5; i++) { s += (n1(x * f, z * f) - .5) * a; a *= .5; f *= 2.03; } return s; };
-  const ICEMAP = ISLE(), WINTER = MAP_ID === 'ice', STORM = MAP_ID === 'storm';
+  const ICEMAP = ISLE(), WINTER = MAP_ID === 'ice', STORM = MAP_ID === 'storm', MARSMAP = MAP_ID === 'mars';
   if (ICEMAP) H = iceH;
+  else if (MARSMAP) H = marsH;
   else H = (x, z) => {
     // rolling hills, flattened at both bases and their runways
     let h = BASE_Y + Math.max(-3, fbm(x * 0.0024 + 3, z * 0.0024 - 2) * 85 + 10);
@@ -783,6 +824,13 @@ function buildWorld(seed) {
   for (let i = 0; i < p2.count; i += 3) {
     const x = (p2.getX(i) + p2.getX(i + 1) + p2.getX(i + 2)) / 3, y = (p2.getY(i) + p2.getY(i + 1) + p2.getY(i + 2)) / 3, z = (p2.getZ(i) + p2.getZ(i + 1) + p2.getZ(i + 2)) / 3;
     const slope = 1 - nrm.getY(i);
+    if (MARSMAP) {   // the HiRISE photo carries the colour; bases and pads a little lighter, steep faces a touch darker
+      c.setRGB(1, 1, 1);
+      if (slope > 0.3) c.multiplyScalar(1 - Math.min(0.25, (slope - 0.3) * 0.6));
+      for (const b of BASES) if (Math.hypot(x - b.x, z - b.z) < BASE_R) c.lerp(new THREE.Color(1.25, 1.15, 1.05), 0.35);
+      for (let k = 0; k < 3; k++) { cols[(i + k) * 3] = c.r; cols[(i + k) * 3 + 1] = c.g; cols[(i + k) * 3 + 2] = c.b; }
+      continue;
+    }
     if (STORM) {    // wet summer night: dark grass, mud on the tracks' sides, dark wet rock on the slopes, moss up high
       c.copy(cG1).lerp(cG2, n2(x * 0.004, z * 0.004)).multiplyScalar(0.78);
       if (y > 3 && y < 80 && n2(x * 0.012 + 4, z * 0.012) > 0.64) c.lerp(cMud, 0.5);
@@ -823,9 +871,14 @@ function buildWorld(seed) {
   geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
   const groundTex = GROUND_TEX || (GROUND_TEX = new THREE.TextureLoader().load('models/ground.jpg?v=' + ASSET_V));
   groundTex.wrapS = groundTex.wrapT = THREE.RepeatWrapping; groundTex.repeat.set(SX / 16, SZ / 16); groundTex.colorSpace = THREE.SRGBColorSpace; groundTex.anisotropy = 8;
-  const tmat = new THREE.MeshStandardMaterial({ vertexColors: true, map: groundTex, roughness: 1, flatShading: true });
+  let tmat = new THREE.MeshStandardMaterial({ vertexColors: true, map: groundTex, roughness: 1, flatShading: true });
+  if (MARSMAP) {
+    const mt = MARS_TEX || (MARS_TEX = new THREE.TextureLoader().load('maps/mars_tex.jpg?v=' + ASSET_V));
+    mt.colorSpace = THREE.SRGBColorSpace; mt.anisotropy = 8;
+    tmat = new THREE.MeshStandardMaterial({ vertexColors: true, map: mt, roughness: 1 });
+  }
   // two scales of the same ground picture, so the repeat doesn't show
-  tmat.onBeforeCompile = sh => { sh.fragmentShader = sh.fragmentShader.replace('#include <map_fragment>', `
+  if (!MARSMAP) tmat.onBeforeCompile = sh => { sh.fragmentShader = sh.fragmentShader.replace('#include <map_fragment>', `
     vec4 sampledDiffuseColor = texture2D( map, vMapUv );
     vec4 tex2 = texture2D( map, vMapUv * 0.213 + vec2(0.37, 0.71) );
     diffuseColor *= mix( vec4(1.0), mix( sampledDiffuseColor, tex2, 0.45 ) * ${WINTER ? '2.6' : '1.0'}, ${WINTER ? '0.3' : '1.0'} );`); };
@@ -842,7 +895,7 @@ function buildWorld(seed) {
     sh.vertexShader = 'uniform float uTime;\n' + sh.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
       transformed.y += sin(position.x * 0.04 + uTime * 0.9) * 0.45 + cos(position.z * 0.055 + uTime * 1.1) * 0.4;`);
   };
-  const water = new THREE.Mesh(wgeo, wmat); water.receiveShadow = true; group.add(water);
+  const water = new THREE.Mesh(wgeo, wmat); water.receiveShadow = true; if (!MARSMAP) group.add(water);
 
   // ── materials ──
   const M = (color, extra = {}) => new THREE.MeshStandardMaterial(Object.assign({ color, roughness: .85, flatShading: true }, extra));
@@ -936,13 +989,14 @@ function buildWorld(seed) {
     // garage sheds for tanks / jeeps
     mk(new THREE.BoxGeometry(30, 0.6, 100), mRoof, bx + sx * 115, BASE_Y + 7, bz + 30);
     for (const oz of [-20, 80]) mk(new THREE.CylinderGeometry(0.4, 0.4, 7, 6), mMetal, bx + sx * 115, BASE_Y + 3.5, bz + oz);
-    // pier and port buildings
+    if (!MARSMAP) {   // pier and port buildings (no sea on Mars)
     const px = PORT[team].x, cz = coastZ(px);
     block(px, cz + 50, 14, 3, 150, mConc, -1.5);
     for (let i = 0; i < 6; i++) mk(new THREE.CylinderGeometry(0.6, 0.6, 6, 6), mDark, px + 6, -1, cz + 0 + i * 25);
     block(px - sx * 40, cz - 30, 26, 10, 18, mWall2);
     mk(new THREE.BoxGeometry(2, 22, 2), M(0xc9a23a), px - sx * 18, H(px - sx * 18, cz - 10) + 11, cz - 10);   // crane
     mk(new THREE.BoxGeometry(2, 2, 26), M(0xc9a23a), px - sx * 18, H(px - sx * 18, cz - 10) + 22, cz + 2);
+    }
     // ── extra base detail ──
     winBox(bx - sx * 70, bz - 40, 34, 22, BASE_Y + 5.2);
     mk(new THREE.BoxGeometry(3, 4.5, 0.3), mDark, bx - sx * 70, BASE_Y + 2.2, bz - 28.9);                 // HQ door
@@ -1008,7 +1062,7 @@ function buildWorld(seed) {
   const trunkGeo = new THREE.CylinderGeometry(.35, .5, 3.4, 5); trunkGeo.translate(0, 1.7, 0);
   const trees = [];
   const clusters = ICEMAP ? Array.from({ length: 95 }, () => [(rand() * 2 - 1) * (MAP_X - 150), (rand() * 2 - 1) * (MAP_Z - 80)]) : Array.from({ length: 70 }, () => [(rand() * 2 - 1) * (MAP_X - 200), (rand() * 2 - 1) * 700 - 250]);
-  for (let i = 0; i < 40000 && trees.length < 4200; i++) {
+  for (let i = 0; i < (MARSMAP ? 0 : 40000) && trees.length < 4200; i++) {     // nothing grows on Mars
     const cl = clusters[i % clusters.length];
     const x = cl[0] + (rand() - .5) * 220, z = cl[1] + (rand() - .5) * 220, y = H(x, z);
     if (y < 3 || y > (ICEMAP ? 240 : 160)) continue;
@@ -1043,7 +1097,7 @@ function buildWorld(seed) {
       const rg = new THREE.BufferGeometry(); rg.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3)); rg.setIndex(idx); rg.computeVertexNormals();
       const road = new THREE.Mesh(rg, rmat); road.receiveShadow = true; group.add(road);
     }
-  } else { const pts = [], idx = []; let n = 0;
+  } else if (!MARSMAP) { const pts = [], idx = []; let n = 0;
     for (let x = -1000; x <= 1000; x += 8) {
       const z = roadZ(x), y = Math.max(H(x, z), H(x, z - 5), H(x, z + 5)) + 0.35;
       pts.push(x, y, z - 5.5, x, y, z + 5.5);
@@ -1055,26 +1109,26 @@ function buildWorld(seed) {
     for (let x = -960; x <= 960; x += 64) { const z = roadZ(x) + 10; PR.pole.push([x, H(x, z) + 4, z, 0, 1]); }
   }
   // ── bushes, boulders, hay bales, clouds ──
-  for (let i = 0; i < 9000 && PR.bush.length < (ICEMAP ? 700 : 2200); i++) {
+  for (let i = 0; i < (MARSMAP ? 0 : 9000) && PR.bush.length < (ICEMAP ? 700 : 2200); i++) {
     const x = (rand() * 2 - 1) * (MAP_X - 100), z = ICEMAP ? (rand() * 2 - 1) * (MAP_Z - 60) : (rand() * 2 - 1) * 760 - 240, y = H(x, z);
     if (ICEMAP && (y > 200 || nearIceRoad(x, z, 7))) continue;
     if (y < 3 || y > 170 || onBasePad(x, z) || Math.abs(z - roadZ(x)) < 8 || inPad(x, z, 6)) continue;
     PR.bush.push([x, y + 0.5, z, rand() * 3, 0.6 + rand() * 1.1]);
   }
-  for (let i = 0; i < 4000 && PR.rock.length < 700; i++) {
+  for (let i = 0; i < 4000 && PR.rock.length < (MARSMAP ? 1400 : 700); i++) {
     const x = (rand() * 2 - 1) * (MAP_X - 60), z = (rand() * 2 - 1) * (MAP_Z - 100), y = H(x, z);
     if (y < 1 || onBasePad(x, z) || Math.abs(z - roadZ(x)) < 8 || inPad(x, z, 6)) continue;
     PR.rock.push([x, y + 0.2, z, rand() * 6, 0.5 + rand() * rand() * 3.5, rand() * 3]);
   }
-  for (let i = 0; i < (ICEMAP ? 0 : 600) && PR.hay.length < 40; i++) {
+  for (let i = 0; i < (ICEMAP || MARSMAP ? 0 : 600) && PR.hay.length < 40; i++) {
     const x = (rand() - .5) * 900, z = (rand() - .5) * 700 - 60, y = H(x, z);
     if (y < 4 || Math.abs(H(x + 5, z) - y) > 0.8 || Math.abs(z - roadZ(x)) < 9 || inPad(x, z, 8) || boxes.some(b => Math.abs(b.x - x) < b.hx + 3 && Math.abs(b.z - z) < b.hz + 3)) continue;
     PR.hay.push([x, y + 1.0, z, rand() * 3, 1, Math.PI / 2]);
   }
-  for (let i = 0; i < 130; i++) { const cx = (rand() * 2 - 1) * (MAP_X + 900), cz = (rand() * 2 - 1) * (MAP_Z + 900), cy = 620 + rand() * 300;
+  for (let i = 0; i < (MARSMAP ? 0 : 130); i++) { const cx = (rand() * 2 - 1) * (MAP_X + 900), cz = (rand() * 2 - 1) * (MAP_Z + 900), cy = 620 + rand() * 300;
     for (let k = 0; k < 5; k++) PR.cloud.push([cx + (rand() - .5) * 220, cy + (rand() - .5) * 26, cz + (rand() - .5) * 140, 0, 45 + rand() * 60]); }
   // overcast: a layer of grey cloud above everything (planes can climb through it)
-  { const cv = document.createElement('canvas'); cv.width = cv.height = 512; const g2 = cv.getContext('2d'); const img = g2.createImageData(512, 512);
+  if (!MARSMAP) { const cv = document.createElement('canvas'); cv.width = cv.height = 512; const g2 = cv.getContext('2d'); const img = g2.createImageData(512, 512);
     const cn = makeNoise(mulberry32(91)), fb = (x, y) => { let s = 0, a = 0.5, f = 1; for (let o = 0; o < 6; o++) { s += cn(x * f, y * f) * a; a *= 0.5; f *= 2; } return s; };
     for (let y = 0; y < 512; y++) for (let x = 0; x < 512; x++) {
       // tile seamlessly: blend the four wrapped copies
@@ -1106,7 +1160,7 @@ function buildWorld(seed) {
   instance(new THREE.CylinderGeometry(0.14, 0.2, 8, 5), mWood, PR.pole);
   instance(new THREE.BoxGeometry(2.6, 0.14, 0.14), mWood, PR.pole.map(e => [e[0], e[1] + 3.3, e[2], 0, 1]), false);
   instance(new THREE.IcosahedronGeometry(1.5, 0), camFade(M(ICEMAP ? 0x55684f : 0x5a6e38, { roughness: 1 }), 3, 9), PR.bush, true, 0.75);
-  instance(new THREE.DodecahedronGeometry(1, 0), M(0x7c7a72, { roughness: 1 }), PR.rock, true, 0.7);
+  instance(new THREE.DodecahedronGeometry(1, 0), M(MARSMAP ? 0x7a4a32 : 0x7c7a72, { roughness: 1 }), PR.rock, true, 0.7);
   instance(new THREE.CylinderGeometry(1.1, 1.1, 1.5, 10), M(0xc9b060, { roughness: 1 }), PR.hay);
   const cl = instance(new THREE.IcosahedronGeometry(1, 1), new THREE.MeshLambertMaterial({ color: STORM ? 0x30353c : 0xd9dcde, emissive: STORM ? 0x0b0d10 : 0x6a6e72, fog: true, transparent: true, opacity: .9, depthWrite: false }), PR.cloud, false, 0.32);
   if (cl) cl.frustumCulled = false;
@@ -1122,7 +1176,7 @@ function buildWorld(seed) {
   buildMinimapBase();
 }
 const world_flags = [], world_radars = [];
-let GROUND_TEX = null;
+let GROUND_TEX = null, MARS_TEX = null;
 // ── solid blocks in a coarse grid, so buildings by the hundred stay cheap to test ──
 const BOX_CELL = 40;
 let _boxStamp = 1;
@@ -1917,7 +1971,7 @@ function whenModels(fn) { if (modelsDone) fn(); else modelWaiters.push(fn); }
 {
   const L = new GLTFLoader(); L.setMeshoptDecoder(MeshoptDecoder);
   const names = ['tank', 'jet', 'ship', 'jeep', 'drone', 'soldier', 'tree2', 'tank_lo', 'jet_lo', 'ship_lo', 'jeep_lo', 'drone_lo',
-    'country', 'country_lo', 'abandoned', 'abandoned_lo', 'moto', 'moto_lo', 'l9', 'l9_lo', 'harley', 'harley_lo', 'shotgun', 'b2', 'b2_lo', 'b2bomb'];
+    'country', 'country_lo', 'abandoned', 'abandoned_lo', 'moto', 'moto_lo', 'l9', 'l9_lo', 'harley', 'harley_lo', 'shotgun', 'b2', 'b2_lo', 'b2bomb', 'sship', 'sship_lo', 'sdrone', 'sdrone_lo'];
   let left = names.length;
   const prog = Object.fromEntries(names.map(n => [n, 0]));
   const showProg = () => { const k = Object.values(prog).reduce((a, b) => a + b, 0) / names.length; loadingUI(k * 0.9, 'ЗАГРУЗКА ' + Math.round(k * 90) + '%'); };
@@ -2284,10 +2338,12 @@ attribute vec2 aTrk; uniform float uTrkOff; uniform float uTrkLen; uniform vec2 
 // ── per-type fitting ──
 function dressVis(type, vis, color) {
   if (!modelsDone || vis.model) return;
-  const key = vis.skin && DRESS[vis.skin] && MODELS[vis.skin] ? vis.skin : type;
-  const name = { tank: 'tank', plane: 'jet', ship: 'ship', jeep: 'jeep', icbm: 'topol', drone: 'drone', gunner: 'soldier', soldier: 'soldier', moto: 'moto', l9: 'l9', harley: 'harley', b2: 'b2' }[key];
+  let key = vis.skin && DRESS[vis.skin] && MODELS[vis.skin] ? vis.skin : type;
+  if (MAP_ID === 'mars' && !vis.skin && type === 'plane' && MODELS.sship) key = 'splane';       // Mars: spaceships and space drones
+  if (MAP_ID === 'mars' && type === 'drone' && MODELS.sdrone) key = 'sdrone';
+  const name = { tank: 'tank', plane: 'jet', ship: 'ship', jeep: 'jeep', icbm: 'topol', drone: 'drone', gunner: 'soldier', soldier: 'soldier', moto: 'moto', l9: 'l9', harley: 'harley', b2: 'b2', splane: 'sship', sdrone: 'sdrone' }[key];
   if (!MODELS[name]) return;
-  atOrigin(vis.g, () => DRESS[key](vis, color));
+  atOrigin(vis.g, () => { DRESS[key](vis, color); if (MAP_ID === 'mars') marsHelmets(vis); });
   vis.model = true;
   vis.g._sig = NaN;                       // new parts: place them on the next frame
 }
@@ -2742,6 +2798,54 @@ function b2Stick(v, dt) {
     if (v.bombs <= 0) { v.stickN = 0; break; }
   }
 }
+// ═══════════ MARS: spaceships for the planes, small spacecraft for the FPV drones, astronaut helmets ═══════════
+DRESS.splane = function (v, col) {
+  const g = v.g;
+  const holder = fitModel('sship', { len: 19, y: -1.9 }), lo = fitLike(holder, 'sship_lo');
+  if (!holder) return;
+  hideProc(g, [v.flame, v.core]);
+  g.add(holder); g.updateMatrixWorld(true); v.mats = ownMats(holder, col, 0.25);
+  v.gear = new THREE.Group(); g.add(v.gear);                 // it sits on its belly: nothing to fold away
+  // one engine glow at the tail
+  const bb = new THREE.Box3().setFromObject(holder), cy = (bb.min.y + bb.max.y) / 2 - 1.2;
+  for (const [key, len, r] of [['flame', 4.5, 1.1], ['core', 2.6, 0.6]]) { const m = v[key]; m.geometry = new THREE.ConeGeometry(r, len, 12, 1, true); m.position.set(0, cy, bb.min.z - len / 2 + 0.6); m.visible = true; }
+  v.flame.material.color.set(0x7fc8ff); v.core.material.color.set(0xe8f6ff);      // an ion-blue exhaust
+  v.bombs.forEach(b => b.traverse(o => { if (o.isMesh) o.visible = false; }));
+  v.missiles.forEach(b => b.traverse(o => { if (o.isMesh) o.visible = false; }));
+  for (const [i, gun] of v.guns.entries()) gun.position.set(i ? -1.4 : 1.4, cy, bb.max.z - 1);
+  mergeStatic(holder);
+  addLod(v, g, [holder], lo, col, 0.25);
+};
+DRESS.sdrone = function (v, col) {
+  const g = v.g;
+  const holder = fitModel('sdrone', { len: 1.6, centerY: true });
+  if (!holder) return;
+  hideProc(g);
+  holder.scale.divideScalar(g.scale.x);                       // the drone group itself is scaled
+  g.add(holder); v.mats = ownMats(holder, col, 0.2);
+  addLod(v, g, [holder], fitLike(holder, 'sdrone_lo'), col, 0.2);
+  v.props = [];
+};
+// a glass bubble helmet with a white neck ring on every soldier figure in this machine
+function marsHelmets(vis) {
+  const heads = [];
+  vis.g.traverse(o => { if (o.isBone && /Head(_\d+)?$/.test(o.name)) heads.push(o); });
+  if (!heads.length) return;
+  vis.g.updateMatrixWorld(true);
+  const glass = new THREE.MeshStandardMaterial({ color: 0xcfe6ff, roughness: 0.05, metalness: 0.3, transparent: true, opacity: 0.32, depthWrite: false });
+  const ring = new THREE.MeshStandardMaterial({ color: 0xe9e6df, roughness: 0.5 });
+  for (const head of heads) {
+    const hw = head.getWorldPosition(new THREE.Vector3());
+    const ws = head.getWorldScale(new THREE.Vector3()).x;
+    if (!(ws > 0.0001)) continue;
+    const h = new THREE.Group();
+    const bubble = new THREE.Mesh(new THREE.SphereGeometry(0.2, 20, 14), glass); bubble.position.y = 0.06; bubble.renderOrder = 3;
+    const collar = new THREE.Mesh(new THREE.TorusGeometry(0.15, 0.035, 8, 20), ring); collar.rotation.x = Math.PI / 2; collar.position.y = -0.1;
+    h.add(bubble, collar);
+    vis.g.add(h); h.position.copy(vis.g.worldToLocal(hw.clone()));
+    vis.g.updateMatrixWorld(true); head.attach(h);
+  }
+}
 // ═══════════ TREES: the two tree models, mixed at random ═══════════
 // near the camera: the full models, instanced per 250 m cell; further out: a cut-out picture of the same tree
 // on two crossed quads (rendered once from the model), so thousands of trees stay cheap
@@ -2962,6 +3066,7 @@ function setupTowns(group, seed) {
   const build = () => {
     if (st.done || !world || world.group !== group || !TOWN_T.abandoned) return;
     st.done = true;
+    if (!TOWN_PADS.length) return;                 // Mars: no towns
     const addBoxes = list => { for (const b of list) { world.boxes.push(b); gridAddBox(b); } };
     const pad = id => TOWN_PADS.find(p => p.id === id);
     if (MODELS.country) {
@@ -3447,7 +3552,7 @@ const bombMat = new THREE.MeshStandardMaterial({ color: 0x3d4630, roughness: .6 
 const icbmGeo = (() => { const g = new THREE.CylinderGeometry(0.85, 0.85, 12, 10); g.rotateX(Math.PI / 2); return g; })();
 const icbmMat = new THREE.MeshStandardMaterial({ color: 0x5d6648, roughness: .5, metalness: .3 });
 const ICBM_T = 25, ICBM_R = 50;
-const GRAV = 9.8;
+let GRAV = 9.8;                       // set per map: Mars pulls with 3.7
 const SPEC = {
   shell: { speed: 330, grav: 1, life: 6, geo: shellGeo, mat: shellMat, boom: 1.0 },
   navshell: { speed: 300, grav: 1, life: 8, geo: shellGeo, mat: shellMat, boom: 1.1 },
@@ -3873,6 +3978,36 @@ function slopePhysics(v, dt, r) {
     else { v.pos.x = nx; v.pos.z = nz; }
   }
 }
+// Mars: a third of Earth's pull. Over a crest the ground falls away faster than the machine drops, so it
+// leaves the ground with the upward speed it had on the slope, glides, and lands further on
+const JUMP_G = 1.5, JUMP_VY = 7;      // machines fall at 1.5× Mars gravity and leave a crest at most 7 m/s upwards: a hop of a few metres, not a flight
+function marsJump(v, gf, dt) {
+  const ground = restY(gf, gf.p, gf.r), g = GRAV * JUMP_G;
+  if (v.jumpAir) {
+    v.vy -= g * dt; v.pos.y += v.vy * dt;
+    // nose follows the flight path a little; roll levels out
+    const fp = Math.atan2(v.vy, Math.max(4, Math.abs(v.speed))) * 0.6;
+    v.p += (fp - v.p) * Math.min(1, dt * 2.5); v.r *= 1 - Math.min(1, dt * 2);
+    if (v.pos.y <= ground) {
+      const hard = -v.vy;
+      v.pos.y = ground; v.jumpAir = false; v.vy = 0;
+      if (hard > 6) { shake = Math.max(shake, Math.min(0.9, hard / 18)); audio.at('hit', v.pos, Math.min(1, hard / 15), 0.6, 300); particles.dirt(v.pos.clone()); }
+      v.speed *= hard > 10 ? 0.8 : 0.95;
+    }
+    v.airT = (v.airT || 0) + dt;
+    return;
+  }
+  const prev = v.pos.y, vyPrev = v.vy || 0;
+  // would the ballistic path from here stay above the ground? then we are off it
+  const ballistic = prev + vyPrev * dt - 0.5 * g * dt * dt;
+  if (Math.abs(v.speed) > 7 && vyPrev > 0.8 && ground < ballistic - 0.08) {
+    v.jumpAir = true; v.vy = Math.min(JUMP_VY, vyPrev); v.airT = 0; v.pos.y = ballistic;
+    return;
+  }
+  v.p += (gf.p - v.p) * Math.min(1, dt * 8); v.r += (gf.r - v.r) * Math.min(1, dt * 8);
+  v.pos.y = restY(gf, v.p, v.r);
+  v.vy = dt > 0 ? (v.vy || 0) * 0.5 + ((v.pos.y - prev) / dt) * 0.5 : 0;       // how fast the slope carries us up
+}
 function driveGround(v, dt, frozen) {
   const tank = v.type === 'tank';
   const thr = chatOpen ? 0 : (keys.KeyW || keys.ArrowUp ? 1 : 0) - (keys.KeyS || keys.ArrowDown ? 1 : 0);
@@ -3881,7 +4016,7 @@ function driveGround(v, dt, frozen) {
   const crew = moto && v.gunner && v.gunner !== myId;          // a teammate mans the sidecar machine gun
   const maxF = tank ? 22.2 : 33.3, maxR = tank ? 8 : 10, acc = tank ? 6 : moto ? 13 : 11;   // 80 km/h tanks, 120 km/h jeeps and motorcycles
   const target = thr > 0 ? maxF : thr < 0 ? -maxR : 0;
-  v.speed += Math.max(-acc * 1.5 * dt, Math.min(acc * dt, target - v.speed));
+  if (!v.jumpAir) v.speed += Math.max(-acc * 1.5 * dt, Math.min(acc * dt, target - v.speed));   // in the air the wheels have nothing to push on
   let turn;
   if (tank) turn = steer * 0.75 * (v.speed < -0.5 ? -1 : 1);
   else {
@@ -3893,16 +4028,19 @@ function driveGround(v, dt, frozen) {
     v.f2 = +v.steerA.toFixed(2);
   }
   if (frozen) return;
-  const nh = wrap(v.h + turn * dt);
+  const nh = wrap(v.h + turn * dt * (v.jumpAir ? 0.15 : 1));
   const nx = v.pos.x + Math.sin(nh) * v.speed * dt, nz = v.pos.z + Math.cos(nh) * v.speed * dt;
   const r = tank ? 1.9 : moto ? 0.9 : 1.4;                     // about half the hull's width: you stop when you actually touch
   if (H(nx, nz) < -1.4) { v.speed = 0; warnText = 'ВОДА — ДАЛЬШЕ НЕ ПРОЕХАТЬ'; v.h = nh; }
   else if (blocked(nx, nz, r, v)) { v.speed *= -0.2; v.h = nh; }
   else { v.pos.x = nx; v.pos.z = nz; v.h = nh; }
-  slopePhysics(v, dt, r);
+  if (!v.jumpAir) slopePhysics(v, dt, r);
   const gf = groundFollow(v, v.pos.x, v.pos.z, tank ? 3.3 : moto ? 0.9 : 1.45, tank ? 1.45 : moto ? 0.7 : 1.1);
-  v.p += (gf.p - v.p) * Math.min(1, dt * 8); v.r += (gf.r - v.r) * Math.min(1, dt * 8);
-  v.pos.y = restY(gf, v.p, v.r);              // with the tilt actually shown, so the wheels never dip into the ground
+  if (MAP_ID === 'mars') marsJump(v, gf, dt);
+  else {
+    v.p += (gf.p - v.p) * Math.min(1, dt * 8); v.r += (gf.r - v.r) * Math.min(1, dt * 8);
+    v.pos.y = restY(gf, v.p, v.r);              // with the tilt actually shown, so the wheels never dip into the ground
+  }
   // turret: turn towards the aim point; gun elevates to land the shell there
   if (crew) { audio.engine('moto', Math.abs(thr), Math.abs(v.speed) / maxF); return; }
   const tp = _v3.set(v.pos.x, v.pos.y + (tank ? 2.4 : moto ? 1.3 : 2.3), v.pos.z);
@@ -5751,6 +5889,7 @@ function resumeRoom() {
   if (p.vid) setTimeout(() => requestEnter(p.vid), 300);    // back into the same vehicle / seat
 }
 function startPlaying(fromStart) {
+  if (room.map === 'mars' && !MARS.h) { setTimeout(() => { if (room && room.state === 'playing' && !inGame) startPlaying(fromStart); }, 250); return; }   // the Mars height map is still downloading
   const wk = room.seed + ':' + (room.map || 'valley');
   if (worldSeed !== wk) { applyMap(room.map); buildWorld(room.seed); worldSeed = wk; }
   inGame = true;
