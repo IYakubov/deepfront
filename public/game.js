@@ -251,7 +251,28 @@ const audio = (() => {
     engFilter.frequency.setTargetAtTime(e[2] + (e[3] - e[2]) * speed, t, 0.3);
     amb.gain.setTargetAtTime(on * 0.008, t, 0.5);
   }
-  function engineOff() { if (ctx) { if (engSG) engSG.gain.setTargetAtTime(0, ctx.currentTime, 0.3); engGain.gain.setTargetAtTime(0, ctx.currentTime, 0.3); amb.gain.setTargetAtTime(0, ctx.currentTime, 0.5); } }
+  function engineOff() { if (ctx) { if (engSG) engSG.gain.setTargetAtTime(0, ctx.currentTime, 0.3); engGain.gain.setTargetAtTime(0, ctx.currentTime, 0.3); amb.gain.setTargetAtTime(0, ctx.currentTime, 0.5); if (jetN) { jetN.g.gain.setTargetAtTime(0, ctx.currentTime, 0.3); jetN.wg.gain.setTargetAtTime(0, ctx.currentTime, 0.3); } } }
+  // spaceship drive: a jet roar (band-passed noise) with a turbine whine on top — no piston engine at all
+  let jetN = null;
+  function jet(k) {
+    if (!ctx || !noiseBuf) return;
+    const t = ctx.currentTime, on = muted ? 0 : 1;
+    if (!jetN) {
+      const s = ctx.createBufferSource(); s.buffer = noiseBuf; s.loop = true;
+      const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.Q.value = 0.7;
+      const lo = ctx.createBiquadFilter(); lo.type = 'lowpass'; lo.frequency.value = 5200;
+      const g = ctx.createGain(); g.gain.value = 0;
+      s.connect(f); f.connect(lo); lo.connect(g); g.connect(master); s.start();
+      const w = ctx.createOscillator(); w.type = 'sine'; const wg = ctx.createGain(); wg.gain.value = 0; w.connect(wg); wg.connect(master); w.start();
+      jetN = { f, g, w, wg };
+    }
+    engGain.gain.setTargetAtTime(0, t, 0.2); if (engSG) engSG.gain.setTargetAtTime(0, t, 0.2);
+    jetN.f.frequency.setTargetAtTime(420 + k * 1900, t, 0.3);
+    jetN.g.gain.setTargetAtTime(on * (0.05 + k * 0.16), t, 0.25);
+    jetN.w.frequency.setTargetAtTime(1500 + k * 2300, t, 0.4);
+    jetN.wg.gain.setTargetAtTime(on * (0.006 + k * 0.012), t, 0.3);
+    amb.gain.setTargetAtTime(0, t, 0.5);
+  }
   function setMusicVol(v) { music.volume = v; }
   function toggle() {
     muted = !muted;
@@ -318,7 +339,7 @@ const audio = (() => {
     } else if (!on && rainNode) { rainNode.s.stop(); rainNode = null; }
   }
   const musicState = () => ({ src: music.src.split('/').pop(), paused: music.paused, t: +music.currentTime.toFixed(1), vol: music.volume, err: music.error && music.error.code, ready: music.readyState, muted, unlocked });
-  return { unlock, play, at, engine, engineOff, setMusicVol, toggle, tone, whoosh, boom, siren, musicState, thunder, rain };
+  return { unlock, play, at, engine, engineOff, jet, setMusicVol, toggle, tone, whoosh, boom, siren, musicState, thunder, rain };
 })();
 $('mute').onclick = () => { audio.unlock(); audio.toggle(); };
 const _a1 = new THREE.Vector3(), _a2 = new THREE.Vector3();
@@ -2339,9 +2360,9 @@ attribute vec2 aTrk; uniform float uTrkOff; uniform float uTrkLen; uniform vec2 
 function dressVis(type, vis, color) {
   if (!modelsDone || vis.model) return;
   let key = vis.skin && DRESS[vis.skin] && MODELS[vis.skin] ? vis.skin : type;
-  if (MAP_ID === 'mars' && !vis.skin && type === 'plane' && MODELS.sship) key = 'splane';       // Mars: spaceships and space drones
-  if (MAP_ID === 'mars' && type === 'drone' && MODELS.sdrone) key = 'sdrone';
-  const name = { tank: 'tank', plane: 'jet', ship: 'ship', jeep: 'jeep', icbm: 'topol', drone: 'drone', gunner: 'soldier', soldier: 'soldier', moto: 'moto', l9: 'l9', harley: 'harley', b2: 'b2', splane: 'sship', sdrone: 'sdrone' }[key];
+  if (MAP_ID === 'mars' && !vis.skin && type === 'plane' && MODELS.sdrone) key = 'splane';       // Mars: spaceships and space drones
+  if (MAP_ID === 'mars' && type === 'drone' && MODELS.sship) key = 'sdrone';
+  const name = { tank: 'tank', plane: 'jet', ship: 'ship', jeep: 'jeep', icbm: 'topol', drone: 'drone', gunner: 'soldier', soldier: 'soldier', moto: 'moto', l9: 'l9', harley: 'harley', b2: 'b2', splane: 'sdrone', sdrone: 'sship' }[key];
   if (!MODELS[name]) return;
   atOrigin(vis.g, () => { DRESS[key](vis, color); if (MAP_ID === 'mars') marsHelmets(vis); });
   vis.model = true;
@@ -2801,7 +2822,7 @@ function b2Stick(v, dt) {
 // ═══════════ MARS: spaceships for the planes, small spacecraft for the FPV drones, astronaut helmets ═══════════
 DRESS.splane = function (v, col) {
   const g = v.g;
-  const holder = fitModel('sship', { len: 19, y: -1.9 }), lo = fitLike(holder, 'sship_lo');
+  const holder = fitModel('sdrone', { len: 19, y: -1.9 }), lo = fitLike(holder, 'sdrone_lo');      // the orange 'SpaceShip'
   if (!holder) return;
   hideProc(g, [v.flame, v.core]);
   g.add(holder); g.updateMatrixWorld(true); v.mats = ownMats(holder, col, 0.25);
@@ -2818,12 +2839,12 @@ DRESS.splane = function (v, col) {
 };
 DRESS.sdrone = function (v, col) {
   const g = v.g;
-  const holder = fitModel('sdrone', { len: 1.6, centerY: true });
+  const holder = fitModel('sship', { len: 1.6, centerY: true });                                   // the blue 'Spaceship 1/10'
   if (!holder) return;
   hideProc(g);
   holder.scale.divideScalar(g.scale.x);                       // the drone group itself is scaled
   g.add(holder); v.mats = ownMats(holder, col, 0.2);
-  addLod(v, g, [holder], fitLike(holder, 'sdrone_lo'), col, 0.2);
+  addLod(v, g, [holder], fitLike(holder, 'sship_lo'), col, 0.2);
   v.props = [];
 };
 // a glass bubble helmet with a white neck ring on every soldier figure in this machine
@@ -4106,14 +4127,56 @@ function driveGround(v, dt, frozen) {
   }
   audio.engine(tank ? 'tank' : moto ? 'moto' : 'jeep', Math.abs(thr), Math.abs(v.speed) / maxF);
 }
+// Mars spaceship: lifts straight up from where it stands, flies after the mouse at any speed (it can hover),
+// and with the throttle at zero it sinks gently and sets down anywhere reasonably flat
+const SPACE = { VMAX: 170, TURN: 1.5, LIFT: 7, SINK: 5 };
+function spaceFlight(v, dt, frozen) {
+  const ground = Math.max(H(v.pos.x, v.pos.z), 0);
+  if (!v.air) {
+    v.speed = 0;
+    const steer = chatOpen ? 0 : (keys.KeyA || keys.ArrowLeft ? 1 : 0) - (keys.KeyD || keys.ArrowRight ? 1 : 0);
+    if (!frozen) v.h = wrap(v.h + steer * 0.8 * dt);               // turn on the spot
+    v.pos.y = ground + 1.9; v.p += (0 - v.p) * Math.min(1, dt * 6); v.r += (0 - v.r) * Math.min(1, dt * 6);
+    if (v.thr > 0.15 && !frozen) { v.air = true; v.vy = SPACE.LIFT; logMsg('Взлёт! Корабль летит за мышью · тяга 0 — плавная посадка'); }
+    else if (v.thr > 0.02) warnText = 'ТЯГА — ВЕРТИКАЛЬНЫЙ ВЗЛЁТ';
+    return false;
+  }
+  // flying: nose chases the mouse aim, quicker than a jet and at any speed
+  const desH = camYaw, desP = Math.max(-1.3, Math.min(1.3, camPitch));
+  const dh = wrap(desH - v.h), dp = desP - v.p;
+  const yawRate = Math.max(-SPACE.TURN, Math.min(SPACE.TURN, dh * 2.6)), pitchRate = Math.max(-SPACE.TURN, Math.min(SPACE.TURN, dp * 2.6));
+  if (!frozen) { v.h = wrap(v.h + yawRate * dt); v.p = Math.max(-1.35, Math.min(1.35, v.p + pitchRate * dt)); }
+  v.r += (Math.max(-0.9, Math.min(0.9, -yawRate * 0.7)) - v.r) * (1 - Math.exp(-4 * dt));
+  v.speed += (v.thr * SPACE.VMAX - v.speed) * 0.6 * dt;
+  // vertical thrusters: the lift-off push fades; at zero throttle it settles down at a gentle rate
+  v.vy = (v.vy || 0) * Math.exp(-1.2 * dt);
+  const sink = v.thr < 0.05 ? -SPACE.SINK : 0;
+  if (!frozen) { v.pos.addScaledVector(fwd(v.h, v.p, _v1), v.speed * dt); v.pos.y += (v.vy + sink) * dt; }
+  if (v.pos.y > 1400) v.p = Math.min(v.p, -0.05);
+  if (Math.abs(v.pos.x) > MAP_X + 200 || Math.abs(v.pos.z) > MAP_Z + 250) warnText = 'ВЕРНИТЕСЬ В ЗОНУ БОЯ';
+  const agl = v.pos.y - ground;
+  if (v.thr < 0.05 && agl < 40) warnText = 'ПОСАДКА · ' + Math.max(0, Math.round(agl - 1.9)) + ' м';
+  let hitObj = false;
+  if (v.pos.y < 80) for (const b of boxesIn(v.pos.x - 2, v.pos.z - 2, v.pos.x + 2, v.pos.z + 2)) if (Math.abs(v.pos.x - b.x) < b.hx + 2 && Math.abs(v.pos.z - b.z) < b.hz + 2 && v.pos.y < b.y1) { hitObj = true; break; }
+  if (hitObj) { crashMine(v, 'crash'); return true; }
+  if (agl < 1.9) {
+    // a soft set-down when slow; flying into the ground fast is still a crash
+    const gf = groundFollow(v, v.pos.x, v.pos.z, 5, 3);
+    if (v.speed > 35 || Math.abs(gf.p) > 0.3 || Math.abs(gf.r) > 0.3) { crashMine(v, 'crash'); return true; }
+    v.air = false; v.speed = 0; v.vy = 0; v.thr = 0; v.pos.y = ground + 1.9;
+    logMsg('Посадка');
+  }
+  return false;
+}
 function drivePlane(v, dt, frozen) {
   if (!chatOpen) {
     if (keys.KeyW || keys.ArrowUp) v.thr = Math.min(1, v.thr + 0.6 * dt);
     if (keys.KeyS || keys.ArrowDown) v.thr = Math.max(0, v.thr - 0.6 * dt);
   }
   v.f2 = v.thr;
-  const b2 = isB2(v), TAKEOFF = b2 ? B2.TAKEOFF : 55;
-  if (!v.air) {
+  const b2 = isB2(v), TAKEOFF = b2 ? B2.TAKEOFF : 55, space = MAP_ID === 'mars';
+  if (space) { if (spaceFlight(v, dt, frozen)) return; }
+  else if (!v.air) {
     // on wheels: taxi, take-off roll
     const steer = chatOpen ? 0 : (keys.KeyA || keys.ArrowLeft ? 1 : 0) - (keys.KeyD || keys.ArrowRight ? 1 : 0);
     const braking = (keys.KeyS || keys.ArrowDown) && v.thr <= 0.01;
@@ -4238,7 +4301,8 @@ function drivePlane(v, dt, frozen) {
     if (v.loadT >= loadT) { v.bombs = fullB; v.rk = fullR; flares = 3; v.loadT = 0; audio.play('energy', 0.7); centerMsg(hurt ? 'ВООРУЖЕНИЕ ЗАГРУЖЕНО' : 'САМОЛЁТ ГОТОВ', (b2 ? '80 бомб Mk-82 · 5 серий по 16' : '3 бомбы · 16 ракет') + (hurt ? '' : ' · прочность 100%'), 1800, '#9bff7a'); }
   } else v.loadT = 0;
   flareCd = Math.max(0, flareCd - dt);
-  audio.engine(b2 ? 'b2' : 'plane', v.thr, Math.min(1, Math.abs(v.speed) / (b2 ? 130 : 160)));
+  if (space) audio.jet(v.air ? 0.3 + 0.55 * v.thr + 0.15 * Math.min(1, v.speed / 170) : 0.12 + v.thr * 0.5);
+  else audio.engine(b2 ? 'b2' : 'plane', v.thr, Math.min(1, Math.abs(v.speed) / (b2 ? 130 : 160)));
 }
 function dropBomb() {
   const v = myVehicle();
@@ -5386,7 +5450,7 @@ function takeControl(v, seat) {
   camTrans = 1; camTransAt = performance.now(); sniper = false;
   document.body.classList.remove('cmdv');
   $('cmdtip').style.display = 'none'; canvas.style.cursor = '';
-  centerMsg(vName(v).toUpperCase() + (mySeat ? ' · СТРЕЛОК' : ''), mySeat ? 'Мышь — прицел · клик — огонь · колесо вниз — выйти' : v.skin === 'l9' ? 'WASD — ехать · мышь и клик — пулемёт · P — автопилот (точка на карте)' : v.skin === 'harley' ? 'WASD — ехать · мышь — прицел · клик — дробовик (после выстрела — прокрутка)' : v.type === 'moto' ? 'WASD — ехать · мышь и клик — пулемёт · второй игрок может сесть стрелком' : v.skin === 'b2' ? 'W — тяга · разгон и мышь вверх · клик / B — серия из 16 бомб · ПВО его не видит' : v.type === 'plane' ? 'W — тяга · разгон и мышь вверх' : v.type === 'gunner' ? 'Мышь — прицел · клик — огонь · колесо вниз — выйти' : v.type === 'icbm' ? 'WASD — ехать · остановитесь и ПКМ — наведение ракеты' : v.type === 'drone' ? 'W — взлёт · летит за мышью · взрывается при ударе' : v.type === 'soldier' ? 'WASD — идти · Shift — бег · клик — огонь · ПКМ — прицел · R — перезарядка' : 'Колесо вниз — наверх, к выбору техники', 1500);
+  centerMsg(vName(v).toUpperCase() + (mySeat ? ' · СТРЕЛОК' : ''), mySeat ? 'Мышь — прицел · клик — огонь · колесо вниз — выйти' : v.skin === 'l9' ? 'WASD — ехать · мышь и клик — пулемёт · P — автопилот (точка на карте)' : v.skin === 'harley' ? 'WASD — ехать · мышь — прицел · клик — дробовик (после выстрела — прокрутка)' : v.type === 'moto' ? 'WASD — ехать · мышь и клик — пулемёт · второй игрок может сесть стрелком' : v.skin === 'b2' ? 'W — тяга · разгон и мышь вверх · клик / B — серия из 16 бомб · ПВО его не видит' : v.type === 'plane' && MAP_ID === 'mars' ? 'W — тяга: вертикальный взлёт · летит за мышью · тяга 0 — плавная посадка' : v.type === 'plane' ? 'W — тяга · разгон и мышь вверх' : v.type === 'gunner' ? 'Мышь — прицел · клик — огонь · колесо вниз — выйти' : v.type === 'icbm' ? 'WASD — ехать · остановитесь и ПКМ — наведение ракеты' : v.type === 'drone' ? 'W — взлёт · летит за мышью · взрывается при ударе' : v.type === 'soldier' ? 'WASD — идти · Shift — бег · клик — огонь · ПКМ — прицел · R — перезарядка' : 'Колесо вниз — наверх, к выбору техники', 1500);
   lockPointer();
 }
 function leaveVehicle(force) {
