@@ -5476,8 +5476,8 @@ function updateSpotting(dt) {
 // and an enemy's name and health appear only while it is under the crosshair
 let aimedVid = null, aimedT = 0;
 const heatView = () => { const v = myVehicle(); return !!v && v.type === 'plane'; };
-// an enemy machine someone is in right now, within 500 m of the machine I'm in: shown on screen and on the minimap
-const ENEMY_NEAR = 500;
+// an enemy machine someone is in right now, within 300 m of the machine I'm in: shown on screen and on the minimap
+const ENEMY_NEAR = 300;
 const enemyNear = o => { const v = myVehicle(); return !!v && !!(o.driver || o.gunner || o.auto) && o.pos.distanceTo(v.pos) <= ENEMY_NEAR; };
 function updateMarkers() {
   const v = myVehicle(), heat = heatView(), now = performance.now();
