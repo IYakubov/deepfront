@@ -4729,8 +4729,14 @@ function autoPathOn(sx, sz, dx, dz, c) {
   out.reverse();
   // smooth: drop points that a straight line skips safely
   const ok = (a, b) => { const L = Math.hypot(b.x - a.x, b.z - a.z); for (let t = 0; t <= L; t += 8) { const x = a.x + (b.x - a.x) * t / L, z = a.z + (b.z - a.z) * t / L; if (c[cell(x, z)] === Infinity || c[cell(x, z)] > 3) return false; } return true; };
+  // string-pulling: from each corner jump to the FARTHEST point still in plain sight, so open ground or
+  // open sea gives one straight leg instead of the grid's diagonal-then-straight dog-leg
   const sm = []; let a = { x: sx, z: sz };
-  for (let i = 0; i < out.length; i++) { if (i === out.length - 1 || !ok(a, out[i + 1])) { sm.push(out[i]); a = out[i]; } }
+  for (let i = 0; i < out.length;) {
+    let j = out.length - 1;
+    while (j > i && !ok(a, out[j])) j--;
+    sm.push(out[j]); a = out[j]; i = j + 1;
+  }
   return sm;
 }
 // ── the order
