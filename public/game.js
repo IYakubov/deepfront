@@ -3293,7 +3293,8 @@ socket.on('st', (vid, s) => { const v = vehicles.get(vid); if (v && (vid !== myV
 socket.on('gst', (vid, s) => { const v = vehicles.get(vid); if (v && !(vid === myVid && mySeat === 1)) { v.aimYaw = s[0]; v.aimPitch = s[1]; v.f1 = s[2]; } });
 function updateRemote(v, dt, now) {
   if (!v.alive || v.dead) return;
-  const driven = v.driver && v.driver !== myId;
+  // moved by someone else: a driver, or another player's orders / autopilot (those used to stay frozen at their old spot here)
+  const driven = (v.driver && v.driver !== myId) || (v.auto && v.auto !== myId);
   if (!driven) { v.speed *= Math.exp(-2 * dt); return; }
   const ex = Math.min(0.3, (now - v.recv) / 1000);
   const fly = v.type === 'plane' || v.type === 'drone';
