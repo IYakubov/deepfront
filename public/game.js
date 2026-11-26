@@ -189,7 +189,7 @@ const audio = (() => {
     master.connect(comp); comp.connect(ctx.destination);
     noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
     const nd = noiseBuf.getChannelData(0); for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
-    ['shoot', 'hit', 'ricochet', 'energy', 'victory', 'missile_alert', 'explosion', 'tank_shot_1', 'tank_shot_2', 'tank_shot_3', 'engine'].forEach(load);
+    ['shoot', 'hit', 'ricochet', 'energy', 'victory', 'missile_alert', 'explosion', 'tank_shot_1', 'tank_shot_2', 'tank_shot_3', 'tank_shot_4', 'engine'].forEach(load);
     // electric motor + propeller hum
     engOsc = ctx.createOscillator(); engOsc.type = 'sawtooth'; engOsc.frequency.value = 50;
     engOsc2 = ctx.createOscillator(); engOsc2.type = 'triangle'; engOsc2.frequency.value = 25;
@@ -3921,7 +3921,7 @@ addEventListener('wheel', e => {
 }, { passive: true });
 
 // ═══════════ DRIVING ═══════════
-const gunSound = () => 'tank_shot_' + (1 + Math.floor(Math.random() * 3));
+const gunSound = () => 'tank_shot_' + (1 + Math.floor(Math.random() * 4));
 const myVehicle = () => myVid ? vehicles.get(myVid) : null;
 const SHIP_TEL = [-0.4, 0, 0.33, 0.66, 1];
 const SHIP_TEL_TXT = ['НАЗАД', 'СТОП', '1/3', '2/3', 'ПОЛНЫЙ'];
