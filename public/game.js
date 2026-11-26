@@ -4092,7 +4092,7 @@ function driveGround(v, dt, frozen) {
   // weapons
   reload = Math.max(0, reload - dt);
   if (tank) {
-    // where the shell will really land: fly it along its arc
+    // where the shell will really land: fly it along its path
     v.vis.g.updateMatrixWorld(true);
     const mp = v.vis.tip.getWorldPosition(_mk), mv = fwd(v.aimYaw, v.aimPitch, _mkv).multiplyScalar(SPEC.shell.speed);
     markerOnEnemy = false;
@@ -4101,7 +4101,7 @@ function driveGround(v, dt, frozen) {
       _o3[0] = mp.x; _o3[1] = mp.y; _o3[2] = mp.z; _d3[0] = mv.x / (len / sdt); _d3[1] = mv.y / (len / sdt); _d3[2] = mv.z / (len / sdt);
       const mh = castRay(_o3, _d3, len, myVid, { step: 4 });
       if (mh) { mp.set(_o3[0] + _d3[0] * mh.t, _o3[1] + _d3[1] * mh.t, _o3[2] + _d3[2] * mh.t); if (mh.kind === 'veh' && mh.v.alive && mh.v.team !== v.team) markerOnEnemy = mh.v; break; }
-      mp.addScaledVector(mv, sdt); mv.y -= GRAV * sdt;
+      mp.addScaledVector(mv, sdt); mv.y -= GRAV * SPEC.shell.grav * sdt;    // shells fly straight now (grav 0): the circle must not predict a drop
     }
     gunMarker = mp;
     if (mouseFire && reload <= 0 && !chatOpen) {
