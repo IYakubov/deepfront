@@ -5794,7 +5794,7 @@ const heatView = () => { const v = myVehicle(); return !!v && v.type === 'plane'
 // an enemy machine someone is in right now, within 300 m of the machine I'm in: shown on screen and on the minimap
 const ENEMY_NEAR = 300;
 const enemyNear = o => { const v = myVehicle(); return !!v && !!(o.driver || o.gunner) && o.pos.distanceTo(v.pos) <= ENEMY_NEAR; };
-// an enemy machine moving under orders or autopilot (nobody inside) is never marked: you only see the machine itself
+// an enemy machine moving under orders or autopilot (nobody inside) is marked only while you aim at it
 const unmarked = o => !!o.auto && !o.driver && !o.gunner;
 function updateMarkers() {
   const v = myVehicle(), heat = heatView(), now = performance.now();
@@ -5805,7 +5805,7 @@ function updateMarkers() {
     if (!inGame || mode !== 'drive' || o === v || !o.alive || !o.vis.g.visible) { mk.style.display = 'none'; continue; }
     const enemy = o.team !== myTeam();
     const near = enemy && enemyNear(o);
-    if (enemy && (unmarked(o) || !(near || (heat ? o.seen : o.vid === aimedVid)))) { mk.style.display = 'none'; continue; }
+    if (enemy && (unmarked(o) ? o.vid !== aimedVid : !(near || (heat ? o.seen : o.vid === aimedVid)))) { mk.style.display = 'none'; continue; }   // an unmanned mover shows only while you aim at it
     const dist = v ? o.pos.distanceTo(v.pos) : 0;
     if (dist > (enemy ? (near ? ENEMY_NEAR : heat ? 900 : 2600) : 1400)) { mk.style.display = 'none'; continue; }
     let p = project(_v1.copy(o.pos).setY(o.pos.y + (o.type === 'ship' ? 18 : o.type === 'plane' ? 5 : 4.5)));
