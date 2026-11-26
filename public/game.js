@@ -4979,9 +4979,12 @@ let orderGrids = null;
 function orderGrid(kind) {
   if (!orderGrids || orderGrids.world !== world) orderGrids = { world };
   if (orderGrids[kind]) return orderGrids[kind];
-  const c = new Float32Array(AGX * AGZ);
-  for (let k = 0; k < AGZ; k++) for (let i = 0; i < AGX; i++) {
-    const x = -MAP_X + (i + 0.5) * AG, z = -MAP_Z + (k + 0.5) * AG, h = H(x, z);
+  // ships on the island maps sail round the island, partly outside the play area: their grid reaches 360 m further
+  const ext = kind === 'water' && ISLE() ? 360 : 0;
+  const G = { x0: -MAP_X - ext, z0: -MAP_Z - ext, nx: Math.ceil((MAP_X + ext) * 2 / AG), nz: Math.ceil((MAP_Z + ext) * 2 / AG) };
+  const c = new Float32Array(G.nx * G.nz); c.geo = G;
+  for (let k = 0; k < G.nz; k++) for (let i = 0; i < G.nx; i++) {
+    const x = G.x0 + (i + 0.5) * AG, z = G.z0 + (k + 0.5) * AG, h = H(x, z);
     let cost = 1;
     if (kind === 'water') { if (h > -4 || H(x + 12, z) > -2 || H(x - 12, z) > -2 || H(x, z + 12) > -2 || H(x, z - 12) > -2) cost = Infinity; }
     else {
@@ -4995,7 +4998,7 @@ function orderGrid(kind) {
         if (boxesIn(x - m, z - m, x + m, z + m).some(b => b.y1 > h + 1.5 && Math.abs(x - b.x) < b.hx + m && Math.abs(z - b.z) < b.hz + m)) cost = Infinity;
       }
     }
-    c[k * AGX + i] = cost;
+    c[k * G.nx + i] = cost;
   }
   return (orderGrids[kind] = c);
 }
@@ -5004,22 +5007,23 @@ function orderPath(sx, sz, dx, dz, kind) {
 }
 // A* on a given grid (same search as the L9 autopilot)
 function autoPathOn(sx, sz, dx, dz, c) {
-  const N = AGX * AGZ;
-  const cell = (x, z) => Math.max(0, Math.min(AGZ - 1, Math.floor((z + MAP_Z) / AG))) * AGX + Math.max(0, Math.min(AGX - 1, Math.floor((x + MAP_X) / AG)));
+  const GG = c.geo || { x0: -MAP_X, z0: -MAP_Z, nx: AGX, nz: AGZ }, GX = GG.nx, GZ = GG.nz;
+  const N = GX * GZ;
+  const cell = (x, z) => Math.max(0, Math.min(GZ - 1, Math.floor((z - GG.z0) / AG))) * GX + Math.max(0, Math.min(GX - 1, Math.floor((x - GG.x0) / AG)));
   const s = cell(sx, sz), d = cell(dx, dz);
   const g = new Float32Array(N).fill(Infinity), from = new Int32Array(N).fill(-1), done = new Uint8Array(N);
   const heap = [], push = (n, f) => { heap.push([f, n]); let i = heap.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (heap[p][0] <= heap[i][0]) break; [heap[p], heap[i]] = [heap[i], heap[p]]; i = p; } };
   const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let i = 0; for (;;) { const l = i * 2 + 1, r = l + 1; let m = i; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === i) break; [heap[m], heap[i]] = [heap[i], heap[m]]; i = m; } } return top; };
-  const hx = d % AGX, hz = (d / AGX) | 0, heur = n => Math.hypot(n % AGX - hx, ((n / AGX) | 0) - hz);
-  const sxI = s % AGX, szI = (s / AGX) | 0;
+  const hx = d % GX, hz = (d / GX) | 0, heur = n => Math.hypot(n % GX - hx, ((n / GX) | 0) - hz);
+  const sxI = s % GX, szI = (s / GX) | 0;
   g[s] = 0; push(s, heur(s));
   const nb = [[1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1], [1, 1, 1.414], [1, -1, 1.414], [-1, 1, 1.414], [-1, -1, 1.414]];
   while (heap.length) {
     const [, n] = pop(); if (done[n]) continue; done[n] = 1; if (n === d) break;
-    const ni = n % AGX, nk = (n / AGX) | 0;
+    const ni = n % GX, nk = (n / GX) | 0;
     for (const [di, dk, w] of nb) {
-      const i = ni + di, k = nk + dk; if (i < 0 || k < 0 || i >= AGX || k >= AGZ) continue;
-      const m = k * AGX + i;
+      const i = ni + di, k = nk + dk; if (i < 0 || k < 0 || i >= GX || k >= GZ) continue;
+      const m = k * GX + i;
       let cm = c[m];
       if (cm === Infinity && (Math.max(Math.abs(i - sxI), Math.abs(k - szI)) <= 2 || Math.max(Math.abs(i - hx), Math.abs(k - hz)) <= 1)) cm = 6;
       if (cm === Infinity || done[m]) continue;
@@ -5028,7 +5032,7 @@ function autoPathOn(sx, sz, dx, dz, c) {
     }
   }
   if (from[d] < 0 && d !== s) return null;
-  const out = []; for (let n = d; n >= 0 && n !== s; n = from[n]) out.push({ x: -MAP_X + (n % AGX + 0.5) * AG, z: -MAP_Z + (((n / AGX) | 0) + 0.5) * AG });
+  const out = []; for (let n = d; n >= 0 && n !== s; n = from[n]) out.push({ x: GG.x0 + (n % GX + 0.5) * AG, z: GG.z0 + (((n / GX) | 0) + 0.5) * AG });
   out.reverse();
   // smooth: drop points that a straight line skips safely
   const ok = (a, b) => { const L = Math.hypot(b.x - a.x, b.z - a.z); for (let t = 0; t <= L; t += 8) { const x = a.x + (b.x - a.x) * t / L, z = a.z + (b.z - a.z) * t / L; if (c[cell(x, z)] === Infinity || c[cell(x, z)] > 3) return false; } return true; };
