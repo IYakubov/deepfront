@@ -189,7 +189,7 @@ const audio = (() => {
     master.connect(comp); comp.connect(ctx.destination);
     noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
     const nd = noiseBuf.getChannelData(0); for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
-    ['shoot', 'hit', 'ricochet', 'energy', 'victory', 'missile_alert', 'explosion', 'tank_shot_1', 'tank_shot_2', 'tank_shot_3', 'tank_shot_4', 'engine'].forEach(load);
+    ['shoot', 'hit', 'ricochet', 'energy', 'victory', 'missile_alert', 'explosion', 'tank_shot_1', 'tank_shot_2', 'tank_shot_3', 'tank_shot_4', 'shotgun', 'engine'].forEach(load);
     // electric motor + propeller hum
     engOsc = ctx.createOscillator(); engOsc.type = 'sawtooth'; engOsc.frequency.value = 50;
     engOsc2 = ctx.createOscillator(); engOsc2.type = 'triangle'; engOsc2.frequency.value = 25;
@@ -3713,7 +3713,7 @@ socket.on('shot', (pid, s) => {
   if (s.tv && s.tv === myVid) logMsg('<b style="color:#ff6a50">По вам пущена ракета!</b>');
   if (s.k === 'icbm') { centerMsg('РАКЕТНЫЙ УДАР!', 'цель отмечена на карте · ' + ICBM_T + ' с до удара', 4000, '#ff5a46'); audio.play('missile_alert', 0.9); setTimeout(() => audio.play('missile_alert', 0.9), 2300); audio.at('shoot', o, 2, 0.4, 3000); return; }
   if (s.k === 'mg' || s.k === 'cannon' || s.k === 'ak') { if (Math.random() < 0.5) audio.at('shoot', o, 0.25, s.k === 'mg' ? 1.9 : s.k === 'ak' ? 2.2 : 2.4, 700); }
-  else if (s.k === 'sg') { audio.at(gunSound(), o, 1.0, 1.15, 1500); particles.muzzle(o, vel.clone().normalize()); const sv = vehicles.get(s.vid); if (sv) sv.spinT = 0; }
+  else if (s.k === 'sg') { audio.at('shotgun', o, 1.0, 1, 1200); particles.muzzle(o, vel.clone().normalize()); const sv = vehicles.get(s.vid); if (sv) sv.spinT = 0; }
   else if (s.k === 'shell' || s.k === 'navshell') { audio.at(gunSound(), o, 1.1, s.k === 'navshell' ? 0.85 : 1, 1800); particles.muzzle(o, vel.clone().normalize()); }
   else { audio.at('shoot', o, 1, s.k.includes('rocket') ? 0.6 : 0.8); particles.muzzle(o, vel.clone().normalize()); }
 });
@@ -4123,7 +4123,7 @@ function driveGround(v, dt, frozen) {
       const o = v.vis.tip.getWorldPosition(new THREE.Vector3());
       const dir = fwd(v.aimYaw, v.aimPitch, new THREE.Vector3());
       fireShot('sg', o, dir);
-      particles.muzzle(o, dir); audio.play(gunSound(), 0.9, 0, 1.15); shake = Math.max(shake, 0.25);
+      particles.muzzle(o, dir); audio.play('shotgun', 1.0); shake = Math.max(shake, 0.25);
     }
     if (!inArc) warnText = warnText || 'ДРОБОВИК НЕ ДОСТАЁТ НАЗАД';
   } else {
