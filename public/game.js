@@ -31,7 +31,7 @@ const PORT = [{ x: -1200, z: 520 }, { x: 1200, z: 520 }];
 const SAMS = [[-1010, -110], [-1300, 330], [-1450, -60]];   // team 0, team 1 mirrored
 const HP = { tank: 120, jeep: 50, plane: 70, ship: 260, gunner: 40, icbm: 90, drone: 8, soldier: 30, moto: 35 };
 const HANGAR = { x: -1195, z: -75, hx: 18, hz: 15 };   // repair hangar of team 0; team 1 mirrored in x
-const ASSET_V = '13';                                  // bump when models change (they are cached by the browser)
+const ASSET_V = '14';                                  // bump when models change (they are cached by the browser)
 const TYPE_NAME = { tank: 'Танк', jeep: 'Джип', plane: 'Самолёт', ship: 'Корабль', gunner: 'Пулемётчик', icbm: 'SS-27', drone: 'FPV-дрон', soldier: 'Солдат', moto: 'Мотоцикл' };
 const TYPE_ICON = { tank: '▣', jeep: '◆', plane: '✈', ship: '⛴', gunner: '☗', icbm: '⇪', drone: '✣', soldier: '✚', moto: '⚙' };
 const TEAM_COL = [0x6f7d40, 0x3f6283];
@@ -1993,7 +1993,7 @@ function whenModels(fn) { if (modelsDone) fn(); else modelWaiters.push(fn); }
 {
   const L = new GLTFLoader(); L.setMeshoptDecoder(MeshoptDecoder);
   const names = ['tank', 'jet', 'ship', 'jeep', 'drone', 'soldier', 'tree2', 'tank_lo', 'jet_lo', 'ship_lo', 'jeep_lo', 'drone_lo',
-    'country', 'country_lo', 'abandoned', 'abandoned_lo', 'moto', 'moto_lo', 'l9', 'l9_lo', 'harley', 'harley_lo', 'shotgun', 'b2', 'b2_lo', 'b2bomb', 'sship', 'sship_lo', 'sdrone', 'sdrone_lo'];
+    'country', 'country_lo', 'abandoned', 'abandoned_lo', 'moto', 'moto_lo', 'l9', 'l9_lo', 'harley', 'harley_lo', 'shotgun', 'b2', 'b2_lo', 'b2bomb', 'sship', 'sship_lo', 'sdrone', 'sdrone_lo', 'shell'];
   let left = names.length;
   const prog = Object.fromEntries(names.map(n => [n, 0]));
   const showProg = () => { const k = Object.values(prog).reduce((a, b) => a + b, 0) / names.length; loadingUI(k * 0.9, 'ЗАГРУЗКА ' + Math.round(k * 90) + '%'); };
@@ -2808,6 +2808,20 @@ whenModels(() => {
   geo.translate(-c.x, -c.y, -c.z); geo.scale(B2.S, B2.S, B2.S); geo.rotateY(Math.PI);     // nose along +z (shots look along their velocity)
   SPEC.b2bomb.geo = geo; SPEC.b2bomb.mat = mesh.material;
 });
+// tank and ship shells use the 'Tank Shell (bullet)' model: nose along +z (shots look along their velocity)
+whenModels(() => {
+  const src = MODELS.shell; if (!src) return;
+  let mesh = null; src.updateMatrixWorld(true); src.traverse(o => { if (o.isMesh && !mesh) mesh = o; });
+  if (!mesh) return;
+  const mk = len => {
+    const geo = mesh.geometry.clone().applyMatrix4(mesh.matrixWorld);
+    geo.computeBoundingBox(); const bb = geo.boundingBox, c = bb.getCenter(new THREE.Vector3()), s = len / (bb.max.y - bb.min.y);
+    geo.translate(-c.x, -c.y, -c.z); geo.scale(s, s, s); geo.rotateX(Math.PI / 2);
+    return geo;
+  };
+  SPEC.shell.geo = mk(1.3); SPEC.navshell.geo = mk(1.8);
+  SPEC.shell.mat = SPEC.navshell.mat = mesh.material;
+});
 // a stick: 16 bombs a few metres apart, alternating left and right bay
 function b2Stick(v, dt) {
   if (!v.stickN) return;
@@ -3576,8 +3590,8 @@ const icbmMat = new THREE.MeshStandardMaterial({ color: 0x5d6648, roughness: .5,
 const ICBM_T = 25, ICBM_R = 50;
 let GRAV = 9.8;                       // set per map: Mars pulls with 3.7
 const SPEC = {
-  shell: { speed: 330, grav: 1, life: 6, geo: shellGeo, mat: shellMat, boom: 1.0 },
-  navshell: { speed: 300, grav: 1, life: 8, geo: shellGeo, mat: shellMat, boom: 1.1 },
+  shell: { speed: 330, grav: 0, life: 6, geo: shellGeo, mat: shellMat, boom: 1.0 },       // tank and ship shells fly dead straight to the aim
+  navshell: { speed: 300, grav: 0, life: 8, geo: shellGeo, mat: shellMat, boom: 1.1 },
   mg: { speed: 650, grav: 0.3, life: 1.6, geo: bulletGeo, mat: tracerMat, len: 4 },
   ak: { speed: 715, grav: 0.3, life: 1.3, geo: bulletGeo, mat: tracerMat, len: 3 },
   sg: { speed: 520, grav: 0.5, life: 0.24, geo: bulletGeo, mat: tracerMat, len: 5 },
@@ -4072,7 +4086,7 @@ function driveGround(v, dt, frozen) {
   if (tank) { v.vis.g.updateMatrixWorld(true); v.vis.tip.getWorldPosition(tp); }   // the shell starts at the muzzle
   const dist = Math.hypot(aimPt.x - tp.x, aimPt.z - tp.z), dy = aimTargetY() - tp.y;
   const harley = v.skin === 'harley', bs = harley ? SPEC.sg : SPEC.mg;
-  const el = tank ? ballisticElev(dist, dy, SPEC.shell.speed, GRAV) : Math.atan2(dy, dist) + 0.5 * GRAV * bs.grav * dist / (bs.speed * bs.speed);
+  const el = tank ? Math.atan2(dy, dist) : Math.atan2(dy, dist) + 0.5 * GRAV * bs.grav * dist / (bs.speed * bs.speed);
   v.aimPitch += (Math.max(-0.2, Math.min(tank ? 0.35 : 0.9, el)) - v.aimPitch) * Math.min(1, dt * (tank ? 4 : 12));
   // weapons
   reload = Math.max(0, reload - dt);
@@ -4551,7 +4565,7 @@ function driveShip(v, dt, frozen) {
   const want = Math.atan2(aimPt.x - v.pos.x, aimPt.z - v.pos.z);
   v.aimYaw = wrap(v.aimYaw + Math.max(-0.7 * dt, Math.min(0.7 * dt, wrap(want - v.aimYaw))));
   const dist = Math.hypot(aimPt.x - v.pos.x, aimPt.z - v.pos.z);
-  v.aimPitch += (Math.min(0.6, ballisticElev(dist, aimTargetY() - 5, SPEC.navshell.speed, GRAV)) - v.aimPitch) * Math.min(1, dt * 3);
+  v.aimPitch += (Math.max(-0.3, Math.min(0.6, Math.atan2(aimTargetY() - 5, dist))) - v.aimPitch) * Math.min(1, dt * 3);   // straight at the aim point
   reload = Math.max(0, reload - dt); reload2 = Math.max(0, reload2 - dt);
   if (mouseFire && reload <= 0 && !chatOpen && !frozen) {
     v.vis.g.updateMatrixWorld(true);
