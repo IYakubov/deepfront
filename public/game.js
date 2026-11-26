@@ -164,7 +164,7 @@ const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;',
 const audio = (() => {
   let ctx = null, master = null, muted = false, unlocked = false;
   const buffers = {};
-  const TRACKS = ['ship', 'math', 'bladerunner', 'tank_epic'];
+  const TRACKS = ['ship', 'math', 'bladerunner', 'tank_epic', 'dark_place'];
   let trackI = 0;
   const music = new Audio('audio/' + TRACKS[0] + '.mp3');
   music.volume = 0.3;
