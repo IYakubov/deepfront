@@ -3923,7 +3923,7 @@ addEventListener('wheel', e => {
 
 // ═══════════ DRIVING ═══════════
 let gunN = 0;
-const gunSound = () => ++gunN % 3 === 0 ? 'tank_shot_4' : 'tank_shot_' + (1 + Math.floor(Math.random() * 3));   // every third shot is the new one
+const gunSound = () => ++gunN % 2 === 0 ? 'tank_shot_4' : 'tank_shot_' + (1 + Math.floor(Math.random() * 3));   // every second shot is the new one
 const myVehicle = () => myVid ? vehicles.get(myVid) : null;
 const SHIP_TEL = [-0.4, 0, 0.33, 0.66, 1];
 const SHIP_TEL_TXT = ['НАЗАД', 'СТОП', '1/3', '2/3', 'ПОЛНЫЙ'];
@@ -4607,7 +4607,7 @@ function driveShip(v, dt, frozen) {
   lockBeep -= dt;
   if (lockVid && lockBeep <= 0 && reload2 <= 0) { audio.tone(lockedOn ? 1250 : 760, lockedOn ? 0.12 : 0.05, 0.035); lockBeep = lockedOn ? 0.16 : 0.32; }
   if (mouseAlt && reload2 <= 0 && !chatOpen && !frozen) {
-    reload2 = 18;
+    reload2 = 36;          // ship rocket salvo: twice the old 18 s
     const lockV = lockedOn && vehicles.get(lockVid);
     const shipTv = lockV ? lockVid : aimHit && aimHit.kind === 'veh' && aimHit.v.team !== v.team && aimHit.v.alive ? aimHit.v.vid : null;
     logMsg(lockV ? 'Ракеты с захватом: <b style="color:#ff7a68">' + vName(lockV) + '</b>' : shipTv ? 'Ракетный залп с наведением: <b style="color:#ff7a68">' + vName(aimHit.v) + '</b>' : 'Ракетный залп по точке');
@@ -5793,7 +5793,9 @@ let aimedVid = null, aimedT = 0;
 const heatView = () => { const v = myVehicle(); return !!v && v.type === 'plane'; };
 // an enemy machine someone is in right now, within 300 m of the machine I'm in: shown on screen and on the minimap
 const ENEMY_NEAR = 300;
-const enemyNear = o => { const v = myVehicle(); return !!v && !!(o.driver || o.gunner || o.auto) && o.pos.distanceTo(v.pos) <= ENEMY_NEAR; };
+const enemyNear = o => { const v = myVehicle(); return !!v && !!(o.driver || o.gunner) && o.pos.distanceTo(v.pos) <= ENEMY_NEAR; };
+// an enemy machine moving under orders or autopilot (nobody inside) is never marked: you only see the machine itself
+const unmarked = o => !!o.auto && !o.driver && !o.gunner;
 function updateMarkers() {
   const v = myVehicle(), heat = heatView(), now = performance.now();
   if (aimHit && aimHit.kind === 'veh' && aimHit.v.alive && aimHit.v.team !== myTeam()) { aimedVid = aimHit.v.vid; aimedT = now; }
@@ -5803,7 +5805,7 @@ function updateMarkers() {
     if (!inGame || mode !== 'drive' || o === v || !o.alive || !o.vis.g.visible) { mk.style.display = 'none'; continue; }
     const enemy = o.team !== myTeam();
     const near = enemy && enemyNear(o);
-    if (enemy && !(near || (heat ? o.seen : o.vid === aimedVid))) { mk.style.display = 'none'; continue; }
+    if (enemy && (unmarked(o) || !(near || (heat ? o.seen : o.vid === aimedVid)))) { mk.style.display = 'none'; continue; }
     const dist = v ? o.pos.distanceTo(v.pos) : 0;
     if (dist > (enemy ? (near ? ENEMY_NEAR : heat ? 900 : 2600) : 1400)) { mk.style.display = 'none'; continue; }
     let p = project(_v1.copy(o.pos).setY(o.pos.y + (o.type === 'ship' ? 18 : o.type === 'plane' ? 5 : 4.5)));
@@ -5843,7 +5845,7 @@ function updateBottom() {
   else if (v.type === 'drone') { set(2, 'БАТАРЕЯ', Math.max(0, Math.ceil(v.bat)) + ' с'); bar(3, 'ТЯГА', v.thr, '#8fc3e8'); bar(4, 'ЗАРЯД', v.bat / 100, '#9bdc6a'); set(5, 'УДАР', 'ВЗРЫВ'); }
   else if (v.type === 'soldier') { set(1, 'КМ/Ч', Math.round((v.f2 || 0) * 3.6)); set(2, 'ПАТРОНЫ', akReload > 0 ? '…' : akMag + ' / 30'); bar(3, akReload > 0 ? 'ПЕРЕЗАРЯДКА' : 'АК-47 · R', akReload > 0 ? 1 - akReload / 2.3 : akMag / 30, akReload > 0 ? '#e3a53c' : '#9bdc6a'); bar(4, 'ЗДОРОВЬЕ', k, '#c9432f'); set(5, 'SHIFT · ПКМ', 'БЕГ · ПРИЦЕЛ'); }
   else if (v.type === 'gunner') { set(1, 'ПОСТ', 'ПУЛЕМЁТ'); set(2, 'ПРИЦЕЛ', aimHit ? Math.round(aimHit.t) + ' м' : '—'); bar(3, 'ПУЛЕМЁТ', 1, '#9bdc6a'); bar(4, 'УКРЫТИЕ', k, '#9aa39a'); set(5, 'КЛИК', 'ОГОНЬ'); }
-  else { set(2, 'ХОД', SHIP_TEL_TXT[v.tel]); bar(3, 'ОРУДИЯ', 1 - reload / 5, reload > 0 ? '#e3a53c' : '#9bdc6a'); bar(4, 'РАКЕТЫ · ПКМ', 1 - reload2 / 18, reload2 > 0 ? '#e3a53c' : '#ffb03a'); set(5, 'КОРПУС', Math.round(k * 100) + '%'); }
+  else { set(2, 'ХОД', SHIP_TEL_TXT[v.tel]); bar(3, 'ОРУДИЯ', 1 - reload / 5, reload > 0 ? '#e3a53c' : '#9bdc6a'); bar(4, 'РАКЕТЫ · ПКМ', 1 - reload2 / 36, reload2 > 0 ? '#e3a53c' : '#ffb03a'); set(5, 'КОРПУС', Math.round(k * 100) + '%'); }
 }
 function updateTopBar() {
   if (!room) return;
@@ -5895,7 +5897,7 @@ function drawMinimap() {
   for (const s of world.samSites) { const [x, y] = mmP(s.x, s.z); c.fillStyle = TEAM_CSS[s.team]; c.beginPath(); c.moveTo(x, y - 6); c.lineTo(x + 5, y + 4); c.lineTo(x - 5, y + 4); c.closePath(); c.fill(); }
   for (const v of vehicles.values()) {
     if (!v.alive || !v.vis.g.visible) continue;
-    if (v.team !== team && !(enemyNear(v) || (v.seen && heatView()))) continue;
+    if (v.team !== team && (unmarked(v) || !(enemyNear(v) || (v.seen && heatView())))) continue;
     const [x, y] = mmP(v.pos.x, v.pos.z);
     c.save(); c.translate(x, y); c.rotate(-v.h + Math.PI);
     c.fillStyle = v.vid === myVid ? '#fff' : v.team === team ? (v.team ? '#8fb8e0' : '#c2d27a') : '#ff5a46';
