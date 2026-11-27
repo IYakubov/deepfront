@@ -1279,7 +1279,7 @@ function castRay(o, d, maxT, ignoreVid = null, opts = {}) {
     if (!a.alive) continue;
     const dx = a.pos.x - o[0], dy = a.pos.y - o[1], dz = a.pos.z - o[2];
     const along = dx * d[0] + dy * d[1] + dz * d[2];
-    if (along < -4 || along > (best ? best.t : maxT) + 4) continue;
+    if (along < -10 || along > (best ? best.t : maxT) + 10) continue;
     const t = rayAnimal(o, d, a, best ? best.t : maxT);
     if (t !== null && (!best || t < best.t)) best = { t, kind: 'animal', a };
   }
@@ -3184,8 +3184,10 @@ function poseDead(rig, kind, k, side) {
 // Neutral: nobody's friend or enemy. The room's host simulates them (wander, packs, the goose's guard duty)
 // and streams their state; every client animates them. Anyone can shoot them; their health is the server's.
 const ANIM_NAME = { dog: 'Собака', dino: 'Велоцираптор', goose: 'Гусь-снайпер' };
-const ANIM_BOX = { dog: [0.26, 0, 0.82, 0.64], dino: [0.36, 0, 1.75, 1.7], goose: [0.36, 0, 1.42, 0.42] };   // half width, y0, y1, half length
-const ANIM_GAIT = { dog: { walk: 1.25, run: 7.8, turn: 2.6 }, dino: { walk: 1.7, run: 6.8, turn: 1.8 }, goose: { walk: 0.75, run: 3, turn: 2.2 } };
+// animals are drawn 3× their natural size; they move 1.7× faster on the ground, with a slower, heavier cadence
+const ANIM_SCALE = 3, ANIM_FAST = 1.7;
+const ANIM_BOX = Object.fromEntries(Object.entries({ dog: [0.26, 0, 0.82, 0.64], dino: [0.36, 0, 1.75, 1.7], goose: [0.36, 0, 1.42, 0.42] }).map(([k, b]) => [k, b.map(x => x * ANIM_SCALE)]));   // half width, y0, y1, half length
+const ANIM_GAIT = { dog: { walk: 1.25 * ANIM_FAST, run: 7.8 * ANIM_FAST, turn: 2.2 }, dino: { walk: 1.7 * ANIM_FAST, run: 6.8 * ANIM_FAST, turn: 1.5 }, goose: { walk: 0.75 * ANIM_FAST, run: 3 * ANIM_FAST, turn: 1.9 } };
 // metres covered by one full stride cycle at a given speed (longer strides as they speed up)
 const ANIM_STRIDE = { dog: s => 0.8 + Math.min(1, s / 8) * 1.5, dino: s => 1.5 + Math.min(1, s / 7) * 2.2, goose: s => 0.42 + Math.min(1, s / 3.5) * 0.45 };
 const GOOSE_R = 20, GOOSE_AIM = 0.9;              // he guards 20 m around himself; shoulders the rifle for 0.9 s, then fires once
@@ -3205,7 +3207,7 @@ function animPathOK(x0, z0, x1, z1) { const n = Math.ceil(Math.hypot(x1 - x0, z1
 function makeAnimalObj(a) {
   const src = MODELS[a.kind]; if (!src) return null;
   const rig = buildAnimalRig(a.kind, src), g = new THREE.Group();
-  g.rotation.order = 'YXZ'; g.add(rig.root); animalsG.add(g);
+  g.rotation.order = 'YXZ'; g.scale.setScalar(ANIM_SCALE); g.add(rig.root); animalsG.add(g);
   return Object.assign(a, { rig, g, pos: new THREE.Vector3(), yaw: 0, spd: 0, ph: Math.random(), t: Math.random() * 10, aim: 0, deadT: -1, side: a.id % 2 ? 1 : -1, net: null, ai: null, poseSkip: 0 });
 }
 // first placement: worked out the same on every client from the match seed
@@ -3219,7 +3221,7 @@ function placeAnimals() {
     let p;
     if (a.kind === 'dino') {
       if (!packs[a.grp]) { const t = trees.length ? trees[Math.floor(R() * trees.length)] : null; packs[a.grp] = t ? [t.x, t.z] : anywhere(); }
-      p = spot(packs[a.grp][0], packs[a.grp][1], 14) || packs[a.grp];
+      p = spot(packs[a.grp][0], packs[a.grp][1], 30) || packs[a.grp];
     } else p = anywhere();
     a.pos.set(p[0], H(p[0], p[1]), p[1]); a.yaw = R() * TAU;
   }
@@ -3285,11 +3287,11 @@ function animalBrain(a, dt) {
     const lead = [...animals.values()].find(o => o.kind === 'dino' && o.grp === a.grp && o.alive);
     a.follow = lead !== a ? lead : null;
     if (a.follow) {
-      const i = a.id - lead.id, sx = (i % 2 ? 1 : -1) * (3 + i * 1.3), sz = -3.5 * i;
+      const i = a.id - lead.id, sx = (i % 2 ? 1 : -1) * (3 + i * 1.3) * ANIM_SCALE, sz = -3.5 * i * ANIM_SCALE;
       const c = Math.cos(lead.yaw), s = Math.sin(lead.yaw);
       ai.tx = lead.pos.x + sx * c + sz * s; ai.tz = lead.pos.z - sx * s + sz * c;
       const d = Math.hypot(ai.tx - a.pos.x, ai.tz - a.pos.z);
-      const want = d < 1.2 ? 0 : Math.min(G.run * 1.05, lead.spd + Math.max(0, d - 2) * 0.6 + (lead.spd < 0.3 && d > 2 ? G.walk : 0));
+      const want = d < 3 ? 0 : Math.min(G.run * 1.05, lead.spd + Math.max(0, d - 2) * 0.6 + (lead.spd < 0.3 && d > 2 ? G.walk : 0));
       return steer(a, ai, want, dt);
     }
   }
@@ -3319,15 +3321,15 @@ function animalBrain(a, dt) {
   }
   ai.wait -= dt; if (ai.scared) ai.scared -= dt;
   const d = Math.hypot(ai.tx - a.pos.x, ai.tz - a.pos.z);
-  if (ai.mode !== 'idle' && d < (ai.mode === 'run' ? 3 : 1.5)) { ai.mode = 'idle'; ai.wait = a.kind === 'goose' ? 3 + Math.random() * 9 : 1 + Math.random() * (a.kind === 'dog' ? 6 : 10); }
+  if (ai.mode !== 'idle' && d < (ai.mode === 'run' ? 8 : 4)) { ai.mode = 'idle'; ai.wait = a.kind === 'goose' ? 3 + Math.random() * 9 : 1 + Math.random() * (a.kind === 'dog' ? 6 : 10); }
   if (ai.mode === 'idle' && ai.wait <= 0) {
     // somewhere new: dogs roam far and often break into a run; the pack strolls between the trees; the goose potters about
     const runP = a.kind === 'dog' ? 0.35 : a.kind === 'dino' ? 0.2 : 0.05;
-    const [r0, r1] = a.kind === 'dog' ? [25, 170] : a.kind === 'dino' ? [50, 220] : [6, 35];
+    const [r0, r1] = a.kind === 'dog' ? [40, 260] : a.kind === 'dino' ? [60, 300] : [15, 70];
     const home = a.kind === 'goose' ? (ai.home || (ai.home = [a.pos.x, a.pos.z])) : null;
     for (let k = 0; k < 12; k++) {
       let x, z;
-      if (a.kind === 'dino' && world.trees && world.trees.length && k < 8) { const t = world.trees[Math.floor(Math.random() * world.trees.length)]; if (Math.hypot(t.x - a.pos.x, t.z - a.pos.z) > r1 * 1.6) continue; x = t.x + (Math.random() - 0.5) * 12; z = t.z + (Math.random() - 0.5) * 12; }
+      if (a.kind === 'dino' && world.trees && world.trees.length && k < 8) { const t = world.trees[Math.floor(Math.random() * world.trees.length)]; if (Math.hypot(t.x - a.pos.x, t.z - a.pos.z) > r1 * 1.6) continue; x = t.x + (Math.random() - 0.5) * 30; z = t.z + (Math.random() - 0.5) * 30; }
       else { const ang = Math.random() * TAU, r = r0 + Math.random() * (r1 - r0), cx = home ? home[0] : a.pos.x, cz = home ? home[1] : a.pos.z; x = cx + Math.sin(ang) * r; z = cz + Math.cos(ang) * r; }
       if (animLand(x, z) && animPathOK(a.pos.x, a.pos.z, x, z)) { ai.tx = x; ai.tz = z; ai.mode = Math.random() < runP ? 'run' : 'walk'; break; }
     }
@@ -3338,7 +3340,7 @@ function animalBrain(a, dt) {
 function turnTo(y, want, max) { let dy = ((want - y + Math.PI) % TAU + TAU) % TAU - Math.PI; return y + Math.max(-max, Math.min(max, dy)); }
 function steer(a, ai, want, dt) {
   const G = ANIM_GAIT[a.kind], d = Math.hypot(ai.tx - a.pos.x, ai.tz - a.pos.z);
-  if (want > 0 && d > 0.5) {
+  if (want > 0 && d > 1.5) {
     const ang = Math.atan2(ai.tx - a.pos.x, ai.tz - a.pos.z), off = Math.abs(((ang - a.yaw + Math.PI) % TAU + TAU) % TAU - Math.PI);
     a.yaw = turnTo(a.yaw, ang, G.turn * dt * (a.spd > 4 ? 0.7 : 1));
     want *= Math.max(0.25, Math.cos(Math.min(off, 1.3)));             // slow down into a sharp turn
@@ -3367,18 +3369,18 @@ function updateAnimals(dt, now) {
     } else a.deadT += dt;
     // corpses stay a while, then sink away
     if (!a.alive && a.deadT > 45) { a.g.visible = false; continue; }
-    a.pos.y = H(a.pos.x, a.pos.z) - (!a.alive && a.deadT > 40 ? (a.deadT - 40) * 0.25 : 0);
+    a.pos.y = H(a.pos.x, a.pos.z) - (!a.alive && a.deadT > 40 ? (a.deadT - 40) * 0.7 : 0);
     const dist = a.pos.distanceTo(cam);
-    a.g.visible = dist < 420;
+    a.g.visible = dist < 650;
     if (!a.g.visible) continue;
     a.g.position.copy(a.pos); a.g.rotation.y = a.yaw;
     // lie along the slope (only four-legged and the raptor; the goose stays upright)
-    if (a.kind !== 'goose') { const L = a.kind === 'dog' ? 0.5 : 1.0, f = H(a.pos.x + Math.sin(a.yaw) * L, a.pos.z + Math.cos(a.yaw) * L), b = H(a.pos.x - Math.sin(a.yaw) * L, a.pos.z - Math.cos(a.yaw) * L); a.g.rotation.x += ((-Math.atan2(f - b, 2 * L)) - a.g.rotation.x) * Math.min(1, dt * 6); }
-    a.ph = (a.ph + dt * a.spd / ANIM_STRIDE[a.kind](a.spd)) % 1; a.t += dt;
+    if (a.kind !== 'goose') { const L = (a.kind === 'dog' ? 0.5 : 1.0) * ANIM_SCALE, f = H(a.pos.x + Math.sin(a.yaw) * L, a.pos.z + Math.cos(a.yaw) * L), b = H(a.pos.x - Math.sin(a.yaw) * L, a.pos.z - Math.cos(a.yaw) * L); a.g.rotation.x += ((-Math.atan2(f - b, 2 * L)) - a.g.rotation.x) * Math.min(1, dt * 6); }
+    const gs = a.spd / ANIM_FAST; a.ph = (a.ph + dt * a.spd / ANIM_SCALE / ANIM_STRIDE[a.kind](gs)) % 1; a.t += dt;
     // far away: pose less often
-    if (dist > 140 && (a.poseSkip = (a.poseSkip + 1) % 3)) continue;
+    if (dist > 220 && (a.poseSkip = (a.poseSkip + 1) % 3)) continue;
     if (!a.alive) { if (!a.deadDone) { const k = Math.min(1, a.deadT / (a.kind === 'dino' ? 1.3 : 1.05)); poseDead(a.rig, a.kind, k, a.side); a.deadDone = k >= 1; } continue; }
-    if (a.kind === 'dog') poseDog(a.rig, a.ph, a.spd, a.t); else if (a.kind === 'dino') poseDino(a.rig, a.ph, a.spd, a.t); else poseGoose(a.rig, a.ph, a.spd, a.t, a.aim);
+    if (a.kind === 'dog') poseDog(a.rig, a.ph, gs, a.t); else if (a.kind === 'dino') poseDino(a.rig, a.ph, gs, a.t); else poseGoose(a.rig, a.ph, gs, a.t, a.aim);
   }
   if (animHost) {
     animSendT -= dt;
@@ -3409,6 +3411,7 @@ socket.on('gshot', d => {
   a.g.updateMatrixWorld(true);
   const o = a.rig.muzzle ? a.rig.muzzle.getWorldPosition(new THREE.Vector3()) : a.pos.clone().setY(a.pos.y + 0.8);
   const to = v.pos.clone(); to.y += v.type === 'soldier' ? 1.3 : 1.2;
+  o.y = Math.max(o.y, a.pos.y + 0.5);
   const dir = to.clone().sub(o).normalize();
   spawnShot('ak', o, dir.clone().multiplyScalar(700), false, null);
   particles.muzzle(o, dir);

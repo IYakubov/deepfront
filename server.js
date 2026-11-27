@@ -50,15 +50,15 @@ const LAYOUT = [
 ];
 
 const MAPS = ['valley', 'ice', 'storm', 'mars'];
-// neutral animals: 10 dogs, three raptor packs (3, 4 and 3), 4 goose snipers. Nobody's side; the host's browser moves them.
+// neutral animals: 20 dogs, six raptor packs (3, 4, 3, 3, 4, 3), 8 goose snipers. Nobody's side; the host's browser moves them.
 const ANIMAL_HP = { dog: 40, dino: 120, goose: 60 };
 const GOOSE_DMG = { soldier: 30, gunner: 20, moto: 15, jeep: 12, drone: 8, plane: 8, icbm: 5, tank: 4, ship: 3 };
 function makeAnimals(map) {
   if (map === 'mars') return [];                       // nothing lives on Mars
   const list = [];
-  for (let i = 0; i < 10; i++) list.push(['dog', 0]);
-  [3, 4, 3].forEach((n, g) => { for (let i = 0; i < n; i++) list.push(['dino', g + 1]); });
-  for (let i = 0; i < 4; i++) list.push(['goose', 0]);
+  for (let i = 0; i < 20; i++) list.push(['dog', 0]);
+  [3, 4, 3, 3, 4, 3].forEach((n, g) => { for (let i = 0; i < n; i++) list.push(['dino', g + 1]); });
+  for (let i = 0; i < 8; i++) list.push(['goose', 0]);
   return list.map(([kind, grp], id) => ({ id, kind, grp, hp: ANIMAL_HP[kind], max: ANIMAL_HP[kind], alive: true, st: null, lastFire: 0 }));
 }       // Долина, Ледяной остров, Ночной шторм (no ships)
 const rooms = new Map();
@@ -396,7 +396,7 @@ io.on('connection', socket => {
   socket.on('anst', list => {
     if (!room || room.state !== 'playing' || room.hostId !== socket.id || !Array.isArray(list) || !room.animals) return;
     const out = [];
-    for (const s of list.slice(0, 40)) {
+    for (const s of list.slice(0, 64)) {
       if (!Array.isArray(s)) continue;
       const a = room.animals[s[0] | 0]; if (!a || !a.alive) continue;
       a.st = [a.id, +s[1] || 0, +s[2] || 0, +s[3] || 0, Math.max(0, Math.min(12, +s[4] || 0)), s[5] ? 1 : 0];
