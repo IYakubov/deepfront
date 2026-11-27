@@ -49,7 +49,18 @@ const LAYOUT = [
   ['gunner', -985, 40, Math.PI / 2], ['gunner', -1010, 215, Math.PI / 2], ['gunner', -1150, 405, 0],
 ];
 
-const MAPS = ['valley', 'ice', 'storm', 'mars'];       // Долина, Ледяной остров, Ночной шторм (no ships)
+const MAPS = ['valley', 'ice', 'storm', 'mars'];
+// neutral animals: 10 dogs, three raptor packs (3, 4 and 3), 4 goose snipers. Nobody's side; the host's browser moves them.
+const ANIMAL_HP = { dog: 40, dino: 120, goose: 60 };
+const GOOSE_DMG = { soldier: 30, gunner: 20, moto: 15, jeep: 12, drone: 8, plane: 8, icbm: 5, tank: 4, ship: 3 };
+function makeAnimals(map) {
+  if (map === 'mars') return [];                       // nothing lives on Mars
+  const list = [];
+  for (let i = 0; i < 10; i++) list.push(['dog', 0]);
+  [3, 4, 3].forEach((n, g) => { for (let i = 0; i < n; i++) list.push(['dino', g + 1]); });
+  for (let i = 0; i < 4; i++) list.push(['goose', 0]);
+  return list.map(([kind, grp], id) => ({ id, kind, grp, hp: ANIMAL_HP[kind], max: ANIMAL_HP[kind], alive: true, st: null, lastFire: 0 }));
+}       // Долина, Ледяной остров, Ночной шторм (no ships)
 const rooms = new Map();
 
 function newCode() {
@@ -92,6 +103,7 @@ function publicRoom(r) {
     players: [...r.players.values()].map(p => ({ id: p.id, name: p.name, team: p.team, away: !!p.away, vid: p.vid, kills: p.kills, deaths: p.deaths, dmg: Math.round(p.dmg) })),
     vehicles: r.vehicles.map(v => ({ vid: v.vid, team: v.team, type: v.type, skin: v.skin || null, n: v.n, hp: v.hp, max: v.max, alive: v.alive, ammo: v.ammo, spent: v.spent, driver: v.driver, gunner: v.gunner || null, auto: v.auto || null, spawn: v.spawn, st: v.st, })),
     hangars: (r.hangars || []).map(h => ({ team: h.team, hp: h.hp, max: h.max, busy: h.busy, prog: h.prog })),
+    animals: (r.animals || []).map(a => ({ id: a.id, kind: a.kind, grp: a.grp, hp: a.hp, max: a.max, alive: a.alive, st: a.st })),
   };
 }
 function countMachines(r) { r.tickets = [0, 1].map(t => r.vehicles.filter(v => v.team === t && v.alive && !v.spent && !NOT_MACHINE.has(v.type)).length); }
@@ -146,6 +158,7 @@ function startMatch(r) {
   r.tickets = [MACHINES, MACHINES];
   r.vehicles = makeVehicles(r.map);
   r.hangars = makeHangars();
+  r.animals = makeAnimals(r.map);
   for (const p of r.players.values()) { p.kills = 0; p.deaths = 0; p.dmg = 0; p.vid = null; }
   r.endsAt = Date.now() + 3000 + MATCH_TIME * 1000;
   r.startAt = Date.now() + 3000;
@@ -378,6 +391,37 @@ io.on('connection', socket => {
     const dmg = Math.max(1, Math.min(h.k === 'icbm' ? 300 : 95, Math.round(Number(h.dmg) || 0)));
     const pt = Array.isArray(h.pt) ? h.pt.slice(0, 3).map(Number) : null;
     damage(room, v, dmg, p.id, pt, String(h.k || '').slice(0, 8));
+  });
+  // animals: the host streams where they are; anyone may shoot them; the goose sniper's shot is checked here
+  socket.on('anst', list => {
+    if (!room || room.state !== 'playing' || room.hostId !== socket.id || !Array.isArray(list) || !room.animals) return;
+    const out = [];
+    for (const s of list.slice(0, 40)) {
+      if (!Array.isArray(s)) continue;
+      const a = room.animals[s[0] | 0]; if (!a || !a.alive) continue;
+      a.st = [a.id, +s[1] || 0, +s[2] || 0, +s[3] || 0, Math.max(0, Math.min(12, +s[4] || 0)), s[5] ? 1 : 0];
+      out.push(a.st);
+    }
+    socket.to(room.code).volatile.emit('anst', out);
+  });
+  socket.on('ahit', h => {
+    if (!room || room.state !== 'playing' || !h || !room.animals || Date.now() < room.startAt) return;
+    const p = me(), a = room.animals[h.id | 0];
+    if (!p || !a || !a.alive) return;
+    const now = Date.now();
+    p.ah = (p.ah || []).filter(t => now - t < 1000); if (p.ah.length >= 20) return; p.ah.push(now);
+    const dmg = Math.max(1, Math.min(h.k === 'crush' ? 999 : 300, Math.round(Number(h.dmg) || 0)));
+    a.hp = Math.max(0, a.hp - dmg);
+    io.to(room.code).emit('admg', { id: a.id, hp: a.hp, by: p.id });
+    if (a.hp <= 0) { a.alive = false; a.st = null; io.to(room.code).emit('adead', { id: a.id, by: p.id }); broadcastRoom(room); }
+  });
+  socket.on('gfire', d => {
+    if (!room || room.state !== 'playing' || room.hostId !== socket.id || !d || !room.animals) return;
+    const a = room.animals[d.g | 0], v = room.vehicles.find(x => x.vid === d.vid), now = Date.now();
+    if (!a || a.kind !== 'goose' || !a.alive || now - a.lastFire < 2500 || !v || !v.alive || !(v.driver || v.gunner) || now < room.startAt) return;
+    a.lastFire = now;
+    io.to(room.code).emit('gshot', { g: a.id, vid: v.vid });
+    damage(room, v, GOOSE_DMG[v.type] || 10, null, null, 'goose');
   });
   // an enemy repair hangar hit by a shell, rocket, bomb or drone
   socket.on('hhit', h => {

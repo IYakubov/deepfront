@@ -31,7 +31,7 @@ const PORT = [{ x: -1200, z: 520 }, { x: 1200, z: 520 }];
 const SAMS = [[-1010, -110], [-1300, 330], [-1450, -60]];   // team 0, team 1 mirrored
 const HP = { tank: 120, jeep: 50, plane: 70, ship: 260, gunner: 40, icbm: 90, drone: 8, soldier: 30, moto: 35 };
 const HANGAR = { x: -1195, z: -75, hx: 18, hz: 15 };   // repair hangar of team 0; team 1 mirrored in x
-const ASSET_V = '14';                                  // bump when models change (they are cached by the browser)
+const ASSET_V = '15';                                  // bump when models change (they are cached by the browser)
 const TYPE_NAME = { tank: 'Танк', jeep: 'Джип', plane: 'Самолёт', ship: 'Корабль', gunner: 'Пулемётчик', icbm: 'SS-27', drone: 'FPV-дрон', soldier: 'Солдат', moto: 'Мотоцикл' };
 const TYPE_ICON = { tank: '▣', jeep: '◆', plane: '✈', ship: '⛴', gunner: '☗', icbm: '⇪', drone: '✣', soldier: '✚', moto: '⚙' };
 const TEAM_COL = [0x6f7d40, 0x3f6283];
@@ -1275,6 +1275,14 @@ function castRay(o, d, maxT, ignoreVid = null, opts = {}) {
     const t = rayVehicle(o, d, v, best ? best.t : maxT);
     if (t !== null && (!best || t < best.t)) best = { t, kind: 'veh', v };
   }
+  if (!opts.noVeh && !opts.noAnim) for (const a of animals.values()) {
+    if (!a.alive) continue;
+    const dx = a.pos.x - o[0], dy = a.pos.y - o[1], dz = a.pos.z - o[2];
+    const along = dx * d[0] + dy * d[1] + dz * d[2];
+    if (along < -4 || along > (best ? best.t : maxT) + 4) continue;
+    const t = rayAnimal(o, d, a, best ? best.t : maxT);
+    if (t !== null && (!best || t < best.t)) best = { t, kind: 'animal', a };
+  }
   return best;
 }
 
@@ -1956,6 +1964,7 @@ const particles = (() => {
       for (let i = 0; i < 4; i++) spawn(pos.x, pos.y, pos.z, { vx: R() * 30, vy: R() * 30, vz: R() * 30, life: .3, s0: .4, s1: .1, color: 0xffd080, add: true });
       spawn(pos.x, pos.y, pos.z, { vx: R() * 3, vy: R() * 3, vz: R() * 3, life: .8, s0: 1, s1: 3, color: 0x5a5550, a: .5, drag: 1 });
     },
+    blood(pos) { for (let i = 0; i < 6; i++) spawn(pos.x + R() * .2, pos.y + R() * .2, pos.z + R() * .2, { vx: R() * 2.5, vy: 1 + Math.random() * 1.5, vz: R() * 2.5, life: .5 + Math.random() * .3, s0: .25, s1: .7, color: 0x6e0d0a, a: .85, grav: 6, drag: 1.5 }); },
     dirt(pos) {
       for (let i = 0; i < 3; i++) spawn(pos.x, pos.y, pos.z, { vx: R() * 6, vy: Math.random() * 8 + 3, vz: R() * 6, life: .8, s0: 1, s1: 2.6, color: 0x6e604a, a: .6, grav: 10, drag: 1.2 });
     },
@@ -1993,7 +2002,7 @@ function whenModels(fn) { if (modelsDone) fn(); else modelWaiters.push(fn); }
 {
   const L = new GLTFLoader(); L.setMeshoptDecoder(MeshoptDecoder);
   const names = ['tank', 'jet', 'ship', 'jeep', 'drone', 'soldier', 'tree2', 'tank_lo', 'jet_lo', 'ship_lo', 'jeep_lo', 'drone_lo',
-    'country', 'country_lo', 'abandoned', 'abandoned_lo', 'moto', 'moto_lo', 'l9', 'l9_lo', 'harley', 'harley_lo', 'shotgun', 'b2', 'b2_lo', 'b2bomb', 'sship', 'sship_lo', 'sdrone', 'sdrone_lo', 'shell'];
+    'country', 'country_lo', 'abandoned', 'abandoned_lo', 'moto', 'moto_lo', 'l9', 'l9_lo', 'harley', 'harley_lo', 'shotgun', 'b2', 'b2_lo', 'b2bomb', 'sship', 'sship_lo', 'sdrone', 'sdrone_lo', 'shell', 'dog', 'dino', 'goose'];
   let left = names.length;
   const prog = Object.fromEntries(names.map(n => [n, 0]));
   const showProg = () => { const k = Object.values(prog).reduce((a, b) => a + b, 0) / names.length; loadingUI(k * 0.9, 'ЗАГРУЗКА ' + Math.round(k * 90) + '%'); };
@@ -2027,6 +2036,7 @@ function warmup() {
     const vis = buildVis(t, i % 2, 1); addDetail(t, vis, TEAM_COL[i % 2]); if (t !== 'tank') compact(vis.g, visRefs(vis)); realism(vis.g); dressVis(t, vis, TEAM_COL[i % 2]);
     vis.g.position.set(camera.position.x + (i - 3) * 30, 0, camera.position.z - 200); tmp.add(vis.g);
   });
+  ['dog', 'dino', 'goose'].forEach((k, i) => { if (!MODELS[k]) return; try { const r = buildAnimalRig(k, MODELS[k]); r.root.position.set(camera.position.x + i * 6, 0, camera.position.z - 30); tmp.add(r.root); } catch (e) { console.error(e); } });
   const changed = [];
   scene.traverse(o => { if (!o.visible) { changed.push([o, 'visible', false]); o.visible = true; } if (o.isMesh && o.frustumCulled) { changed.push([o, 'frustumCulled', true]); o.frustumCulled = false; } });
   const rt = new THREE.WebGLRenderTarget(64, 64);
@@ -2882,6 +2892,543 @@ function marsHelmets(vis) {
     vis.g.updateMatrixWorld(true); head.attach(h);
   }
 }
+// ═══════════ ANIMALS: dogs, raptors and the goose sniper ═══════════
+// The dog and dinosaur scans come without skeletons, so each gets a procedural rig: bones placed at the
+// joints (measured on the models) and every vertex skinned to them by body region. The goose has its own rig.
+const ANIMAL = {
+  dog: {
+    len: 1.25, rotY: 0, hp: 40,
+    bones: {
+      hips: [null, 0, 0.48, -0.15], chest: ['hips', 0, 0.45, 0.2], neck: ['chest', 0, 0.55, 0.32], head: ['neck', 0, 0.64, 0.45],
+      tail1: ['hips', 0, 0.56, -0.28], tail2: ['tail1', 0, 0.64, -0.42],
+      FLu: ['chest', 0.08, 0.40, 0.28], FLl: ['FLu', 0.08, 0.275, 0.245], FLp: ['FLl', 0.085, 0.095, 0.27],
+      FRu: ['chest', -0.08, 0.40, 0.28], FRl: ['FRu', -0.08, 0.275, 0.245], FRp: ['FRl', -0.085, 0.095, 0.27],
+      RLu: ['hips', 0.085, 0.48, -0.245], RLl: ['RLu', 0.085, 0.33, -0.284], RLp: ['RLl', 0.09, 0.145, -0.375],
+      RRu: ['hips', -0.085, 0.48, -0.245], RRl: ['RRu', -0.085, 0.33, -0.284], RRp: ['RRl', -0.09, 0.145, -0.375],
+    },
+  },
+  dino: {
+    len: 3.3, rotY: Math.PI, hp: 120,
+    bones: {
+      hips: [null, 0, 1.10, 0.45], chest: ['hips', 0, 1.15, 0.85], neck: ['chest', 0, 1.30, 1.0], head: ['neck', 0, 1.60, 1.24],
+      t1: ['hips', 0, 1.18, 0.18], t2: ['t1', 0, 1.22, -0.32], t3: ['t2', 0, 1.24, -0.82], t4: ['t3', 0, 1.20, -1.28],
+      Lth: ['hips', 0.17, 1.06, 0.50], Lsh: ['Lth', 0.17, 0.63, 0.46], Lme: ['Lsh', 0.16, 0.27, 0.55], Lto: ['Lme', 0.15, 0.07, 0.62],
+      Rth: ['hips', -0.17, 1.06, 0.50], Rsh: ['Rth', -0.17, 0.63, 0.46], Rme: ['Rsh', -0.16, 0.27, 0.55], Rto: ['Rme', -0.15, 0.07, 0.62],
+      Lar: ['chest', 0.15, 1.08, 1.02], Lfo: ['Lar', 0.18, 0.94, 1.26],
+      Rar: ['chest', -0.15, 1.08, 1.02], Rfo: ['Rar', -0.18, 0.94, 1.26],
+    },
+  },
+  goose: { len: 1.2, rotY: 0, hp: 60, height: 1.35 },
+};
+const sstep = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+// blend along a chain: list of [bone, start] from the top down (start = coordinate where that bone takes over)
+function chainW(val, chain, soft, down = true) {
+  const out = [];
+  for (let i = 0; i < chain.length; i++) {
+    const [b, a] = chain[i], next = chain[i + 1];
+    const wIn = i === 0 ? 1 : (down ? sstep(a + soft, a - soft, val) : sstep(a - soft, a + soft, val));
+    const wOut = next ? (down ? sstep(next[1] + soft, next[1] - soft, val) : sstep(next[1] - soft, next[1] + soft, val)) : 0;
+    const w = wIn * (1 - wOut);
+    if (w > 0.001) out.push([b, w]);
+  }
+  return out;
+}
+const SKIN = {
+  dog(p) {
+    const s = p.x >= 0 ? 'L' : 'R', body = chainW(p.z, [['hips', 0], ['chest', 0]], 0.12, false);
+    // the body blends hips → chest from back to front
+    const bodyW = p.z < -0.12 ? [['hips', 1]] : p.z > 0.12 ? [['chest', 1]] : body;
+    if (p.z > 0.12 && p.z < 0.42 && p.y < 0.42) {           // front leg
+      const leg = chainW(p.y, [['F' + s + 'u', 0.42], ['F' + s + 'l', 0.27], ['F' + s + 'p', 0.10]], 0.025);
+      const k = sstep(0.40, 0.33, p.y);                          // the top of the leg melts into the chest
+      return leg.map(([b, w]) => [b, w * k]).concat([['chest', 1 - k]]);
+    }
+    if (p.z < -0.12 && p.z > -0.48 && p.y < 0.46) {          // hind leg
+      const leg = chainW(p.y, [['R' + s + 'u', 0.48], ['R' + s + 'l', 0.33], ['R' + s + 'p', 0.15]], 0.025);
+      const k = sstep(0.45, 0.36, p.y);
+      return leg.map(([b, w]) => [b, w * k]).concat([['hips', 1 - k]]);
+    }
+    if (p.z < -0.28 && p.y > 0.46) {                           // tail
+      const t = chainW(-p.z, [['tail1', 0.28], ['tail2', 0.42]], 0.04, false);
+      const k = sstep(0.28, 0.34, -p.z);
+      return t.map(([b, w]) => [b, w * k]).concat([['hips', 1 - k]]);
+    }
+    if (p.z > 0.28 && p.y > 0.42) {                            // neck and head
+      const t = chainW(p.z, [['neck', 0.28], ['head', 0.42]], 0.04, false);
+      const k = sstep(0.28, 0.34, p.z);
+      return t.map(([b, w]) => [b, w * k]).concat([['chest', 1 - k]]);
+    }
+    return bodyW;
+  },
+  dino(p) {
+    const s = p.x >= 0 ? 'L' : 'R';
+    const bodyW = p.z < 0.5 ? [['hips', 1]] : p.z > 0.8 ? [['chest', 1]] : chainW(p.z, [['hips', 0], ['chest', 0.65]], 0.15, false);
+    if (p.z > 0.95 && p.y < 1.12 && p.y > 0.55 && Math.abs(p.x) > 0.06) {     // arms
+      const a = chainW(p.z, [[s + 'ar', 0.95], [s + 'fo', 1.18]], 0.05, false);
+      const k = sstep(1.12, 1.04, p.y);
+      return a.map(([b, w]) => [b, w * k]).concat([['chest', 1 - k]]);
+    }
+    if (p.z > 0.18 && p.z < 0.95 && p.y < 1.02) {               // legs
+      const leg = chainW(p.y, [[s + 'th', 1.06], [s + 'sh', 0.63], [s + 'me', 0.28], [s + 'to', 0.08]], 0.04);
+      const k = sstep(1.0, 0.86, p.y);
+      return leg.map(([b, w]) => [b, w * k]).concat([['hips', 1 - k]]);
+    }
+    if (p.z < 0.25) {                                           // tail
+      const t = chainW(-p.z, [['t1', -0.25], ['t2', 0.32], ['t3', 0.82], ['t4', 1.28]], 0.12, false);
+      const k = sstep(-0.25, -0.12, -p.z);
+      return t.map(([b, w]) => [b, w * k]).concat([['hips', 1 - k]]);
+    }
+    if (p.z > 0.92 && p.y > 1.16) {                             // neck and head
+      const t = chainW(p.z, [['neck', 0.92], ['head', 1.2]], 0.05, false);
+      const k = sstep(0.92, 1.0, p.z);
+      return t.map(([b, w]) => [b, w * k]).concat([['chest', 1 - k]]);
+    }
+    return bodyW;
+  },
+};
+// skinned geometry is built once per kind and shared by every animal of that kind
+const ANIM_GEO = {};
+function animalGeo(kind, src) {
+  if (ANIM_GEO[kind]) return ANIM_GEO[kind];
+  const spec = ANIMAL[kind];
+  src.updateMatrixWorld(true);
+  // normalising transform: rotate, scale to length, centre, feet on y = 0
+  const rot = new THREE.Matrix4().makeRotationY(spec.rotY);
+  const box = new THREE.Box3(), tmp = new THREE.Vector3();
+  const meshes = []; src.traverse(o => { if (o.isMesh) meshes.push(o); });
+  for (const m of meshes) { const pos = m.geometry.attributes.position; const mw = new THREE.Matrix4().multiplyMatrices(rot, m.matrixWorld); for (let i = 0; i < pos.count; i += 3) box.expandByPoint(tmp.fromBufferAttribute(pos, i).applyMatrix4(mw)); }
+  const sc = spec.len / (box.max.z - box.min.z), cx = (box.min.x + box.max.x) / 2, cz = (box.min.z + box.max.z) / 2;
+  const norm = new THREE.Matrix4().makeTranslation(-cx * sc, -box.min.y * sc, -cz * sc).multiply(new THREE.Matrix4().makeScale(sc, sc, sc)).multiply(rot);
+  const names = Object.keys(spec.bones), index = Object.fromEntries(names.map((n, i) => [n, i]));
+  const parts = [];
+  for (const m of meshes) {
+    const geo = m.geometry.clone();
+    // quantised (int16) positions/normals would clip when transformed: unpack them to floats first
+    for (const key of ['position', 'normal']) { const at = geo.attributes[key]; if (at && !(at.array instanceof Float32Array)) { const f = new Float32Array(at.count * 3); for (let i = 0; i < at.count; i++) { f[i * 3] = at.getX(i); f[i * 3 + 1] = at.getY(i); f[i * 3 + 2] = at.getZ(i); } geo.setAttribute(key, new THREE.BufferAttribute(f, 3)); } }
+    geo.applyMatrix4(new THREE.Matrix4().multiplyMatrices(norm, m.matrixWorld));
+    const pos = geo.attributes.position, n = pos.count, si = new Uint16Array(n * 4), sw = new Float32Array(n * 4);
+    for (let i = 0; i < n; i++) {
+      const ws = SKIN[kind](tmp.fromBufferAttribute(pos, i)).sort((a, b) => b[1] - a[1]).slice(0, 4);
+      let tot = 0; for (const [, w] of ws) tot += w;
+      ws.forEach(([bn, w], k) => { si[i * 4 + k] = index[bn]; sw[i * 4 + k] = w / (tot || 1); });
+    }
+    geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(si, 4)); geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(sw, 4));
+    geo.computeBoundingSphere(); geo.boundingSphere.radius *= 1.6;
+    parts.push([geo, m.material]);
+  }
+  return (ANIM_GEO[kind] = { parts, names });
+}
+// a rigged, normalised animal: { root (Group, feet at y = 0, head towards +z), bones{}, meshes[] }
+function buildAnimalRig(kind, src) {
+  if (kind === 'goose') return buildGooseRig(src);
+  const spec = ANIMAL[kind], G = animalGeo(kind, src);
+  const bones = {}, list = [];
+  for (const name of G.names) { const [, x, y, z] = spec.bones[name]; const b = new THREE.Bone(); b.name = name; b.userData.abs = new THREE.Vector3(x, y, z); bones[name] = b; list.push(b); }
+  for (const b of list) { const par = spec.bones[b.name][0]; if (par) { bones[par].add(b); b.position.copy(b.userData.abs).sub(bones[par].userData.abs); } else b.position.copy(b.userData.abs); }
+  const root = new THREE.Group(); root.add(list.find(b => !spec.bones[b.name][0]));
+  root.updateMatrixWorld(true);
+  const skeleton = new THREE.Skeleton(list), meshes = [];
+  for (const [geo, mat] of G.parts) { const sm = new THREE.SkinnedMesh(geo, mat); sm.castShadow = true; root.add(sm); sm.bind(skeleton); meshes.push(sm); }
+  for (const b of list) b.userData.q0 = b.quaternion.clone();
+  return { kind, root, bones, meshes };
+}
+// the goose comes with its own skeleton; its rifle is a loose mesh, so it is pinned to the upper spine
+const GOOSE_BONES = { root: 'rootx', sp1: 'spine_01x', sp2: 'spine_02x', neck: 'neckx', head: 'headx', armL: 'arm_stretchl', armR: 'arm_stretchr',
+  thL: 'thigh_stretchl', legL: 'leg_stretchl', ftL: 'footl', toL: 'toes_01l', thR: 'thigh_stretchr', legR: 'leg_stretchr', ftR: 'footr', toR: 'toes_01r' };
+function buildGooseRig(src) {
+  const inner = SkeletonUtils.clone(src); inner.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(inner), s = ANIMAL.goose.height / (box.max.y - box.min.y);
+  inner.scale.setScalar(s); inner.position.set(-(box.min.x + box.max.x) / 2 * s, -box.min.y * s, -(box.min.z + box.max.z) / 2 * s);
+  const hip = new THREE.Group(), root = new THREE.Group(); hip.add(inner); root.add(hip);
+  root.updateMatrixWorld(true);
+  const found = {}; inner.traverse(o => { if (o.isBone) { const k = o.name.replace(/[._]\d+$/, '').replace(/\./g, ''); if (!found[k]) found[k] = o; } });
+  const bones = { hip };
+  for (const [k, n] of Object.entries(GOOSE_BONES)) bones[k] = found[n];
+  const meshes = [];
+  inner.traverse(o => { if (o.isMesh) { o.castShadow = true; meshes.push(o); if (o.isSkinnedMesh) { o.frustumCulled = false; } } });
+  const gun = meshes.find(m => !m.isSkinnedMesh); if (gun && bones.sp2) bones.sp2.attach(gun);
+  for (const b of Object.values(bones)) if (b) b.userData.q0 = b.quaternion.clone();
+  // muzzle: the rifle lies across the chest, barrel to the goose's left (+x)
+  const muzzle = new THREE.Object3D(); hip.add(muzzle);
+  if (gun) { root.updateMatrixWorld(true); const gb = new THREE.Box3().setFromObject(gun); muzzle.position.set(gb.max.x, (gb.min.y + gb.max.y) / 2, (gb.min.z + gb.max.z) / 2); }
+  return { kind: 'goose', root, bones, meshes, muzzle };
+}
+const _gq = new THREE.Quaternion(), _gv = new THREE.Vector3();
+function gRot(b, ax, a) { if (!b) return; _gv.set(ax === 'x' ? 1 : 0, ax === 'y' ? 1 : 0, ax === 'z' ? 1 : 0); b.quaternion.multiply(_gq.setFromAxisAngle(_gv, a)); }
+function gReset(rig) { for (const b of Object.values(rig.bones)) if (b && b.userData.q0) b.quaternion.copy(b.userData.q0); }
+// ── gaits ──
+// dog: walk (lateral sequence), trot (diagonal pairs), gallop (rotary) — blended by speed
+function poseDog(rig, ph, spd, t) {
+  const B = rig.bones;
+  const run = sstep(3.5, 7, spd), trot = sstep(1.4, 3.2, spd) * (1 - run), walk = 1 - run - trot, move = sstep(0.1, 0.6, spd);
+  const offs = { FL: 0.25 * walk + 0 * trot + 0 * run, FR: 0.75 * walk + 0.5 * trot + 0.12 * run, RL: 0 * walk + 0.5 * trot + 0.5 * run, RR: 0.5 * walk + 0 * trot + 0.62 * run };
+  const amp = (0.38 + 0.25 * run) * move;
+  for (const leg of ['FL', 'FR', 'RL', 'RR']) {
+    const p = ((ph + offs[leg]) % 1 + 1) % 1, duty = 0.62 - 0.22 * run;
+    const front = leg[0] === 'F';
+    let sw, lift;
+    if (p < duty) { sw = -amp + 2 * amp * (p / duty); lift = 0; }                                   // stance: paw on the ground, leg sweeps back
+    else { const q = (p - duty) / (1 - duty); sw = amp - 2 * amp * (q * q * (3 - 2 * q)); lift = Math.sin(Math.PI * q); }   // swing: forward, paw tucked
+    B[leg + 'u'].rotation.x = sw;
+    B[leg + 'l'].rotation.x = front ? lift * (0.9 + 0.5 * run) * move : -lift * (0.7 + 0.4 * run) * move;
+    B[leg + 'p'].rotation.x = front ? lift * 0.8 * move : lift * 0.9 * move;
+  }
+  // spine: flexes in the gallop, bobs at twice the step rate otherwise
+  const flex = Math.sin(ph * Math.PI * 2) * 0.16 * run;
+  B.hips.rotation.x = flex * 0.6; B.chest.rotation.x = -flex;
+  B.hips.position.y = B.hips.userData.abs.y + Math.abs(Math.sin(ph * Math.PI * 2)) * 0.025 * move - 0.012 * move + Math.sin(ph * Math.PI * 2) * 0.04 * run;
+  B.hips.rotation.z = Math.sin(ph * Math.PI * 2) * 0.04 * walk * move;
+  // head nods with the stride, tail wags (slower when running, held out)
+  B.neck.rotation.x = Math.sin(ph * Math.PI * 4) * 0.05 * move + 0.15 * run;
+  B.head.rotation.x = -B.neck.rotation.x * 0.8 + Math.sin(t * 0.7) * 0.05 * (1 - move);
+  B.head.rotation.y = Math.sin(t * 0.37) * 0.25 * (1 - move);
+  B.tail1.rotation.y = Math.sin(t * (6 + 4 * (1 - run))) * (0.45 - 0.25 * run); B.tail2.rotation.y = B.tail1.rotation.y * 0.8;
+  B.tail1.rotation.x = 0.35 * run;
+}
+// raptor: biped walk / run, tail swings against the hips, head held level
+function poseDino(rig, ph, spd, t) {
+  const B = rig.bones;
+  const run = sstep(2.2, 6, spd), move = sstep(0.1, 0.6, spd);
+  const amp = (0.42 + 0.35 * run) * move;
+  for (const [s, off] of [['L', 0], ['R', 0.5]]) {
+    const p = ((ph + off) % 1 + 1) % 1, duty = 0.6 - 0.2 * run;
+    let sw, lift;
+    if (p < duty) { sw = -amp + 2 * amp * (p / duty); lift = 0; }
+    else { const q = (p - duty) / (1 - duty); sw = amp - 2 * amp * (q * q * (3 - 2 * q)); lift = Math.sin(Math.PI * q); }
+    B[s + 'th'].rotation.x = sw - 0.05;
+    B[s + 'sh'].rotation.x = -lift * (0.9 + 0.4 * run) * move - 0.1 * move;   // knee folds as the foot comes forward
+    B[s + 'me'].rotation.x = lift * (1.0 + 0.4 * run) * move;
+    B[s + 'to'].rotation.x = -lift * 0.6 * move;
+    // arms held in, a little sway
+    B[s + 'ar'].rotation.x = Math.sin((ph + off) * Math.PI * 2) * 0.12 * move;
+  }
+  const c = Math.sin(ph * Math.PI * 2);
+  B.hips.position.y = B.hips.userData.abs.y - Math.abs(Math.cos(ph * Math.PI * 2)) * (0.05 + 0.05 * run) * move + 0.03 * move;
+  B.hips.rotation.y = c * 0.10 * move; B.hips.rotation.z = c * 0.05 * move;
+  B.hips.rotation.x = 0.18 * run;                                    // leans forward to run, tail out straight behind
+  B.t1.rotation.y = -c * 0.14 * move + Math.sin(t * 0.8) * 0.12 * (1 - move); B.t2.rotation.y = B.t1.rotation.y * 1.1; B.t3.rotation.y = B.t1.rotation.y * 1.2; B.t4.rotation.y = B.t1.rotation.y * 1.2;
+  B.t1.rotation.x = -0.12 * run;
+  B.neck.rotation.x = -0.18 * run + Math.sin(ph * Math.PI * 4) * 0.04 * move;
+  B.head.rotation.x = -B.hips.rotation.x - B.neck.rotation.x * 0.8;
+  B.neck.rotation.y = -c * 0.08 * move + Math.sin(t * 0.5) * 0.3 * (1 - move);
+}
+// goose: a waddle — short quick steps, the body rolls over the planted foot, webbed feet fold as they lift,
+// head pumps forward with each step. Running: longer strides, leaning in, wings lifted a little.
+// aim (0..1) turns the body side-on and shoulders the rifle.
+function poseGoose(rig, ph, spd, t, aim = 0) {
+  const B = rig.bones; gReset(rig);
+  const run = sstep(1.6, 3.6, spd), move = sstep(0.05, 0.4, spd);
+  const amp = (0.38 + 0.3 * run) * move;
+  let rollTo = 0;
+  for (const [s, off] of [['L', 0], ['R', 0.5]]) {
+    const p = ((ph + off) % 1 + 1) % 1, duty = 0.58 - 0.18 * run;
+    let sw, lift;
+    if (p < duty) { sw = amp - 2 * amp * (p / duty); lift = 0; rollTo += (s === 'L' ? 1 : -1) * Math.sin(Math.PI * p / duty); }
+    else { const q = (p - duty) / (1 - duty); sw = -amp + 2 * amp * (q * q * (3 - 2 * q)); lift = Math.sin(Math.PI * q); }
+    gRot(B['th' + s], 'x', sw);
+    gRot(B['leg' + s], 'x', -lift * (0.9 + 0.5 * run) * move);
+    gRot(B['ft' + s], 'x', lift * 0.9 * move - sw * 0.6 * (1 - lift));   // webbing folds in the air, lies flat on the ground
+    gRot(B['to' + s], 'x', lift * 0.5 * move);
+  }
+  const c2 = Math.cos(ph * Math.PI * 4);
+  B.hip.rotation.z = -rollTo * (0.09 - 0.04 * run) * move;               // waddle over the standing foot
+  B.hip.rotation.y = Math.sin(ph * Math.PI * 2) * 0.08 * move;
+  B.hip.position.y = (c2 * 0.5 + 0.5) * 0.025 * move * (1 + run);
+  B.hip.rotation.x = 0.14 * run;
+  gRot(B.sp2, 'x', 0.12 * run - 0.05 * aim);
+  gRot(B.neck, 'x', Math.sin(ph * Math.PI * 4) * 0.10 * move + 0.18 * run - 0.1 * aim + Math.sin(t * 0.6) * 0.05 * (1 - move));
+  gRot(B.head, 'x', -Math.sin(ph * Math.PI * 4) * 0.06 * move - 0.1 * run);
+  gRot(B.neck, 'z', Math.sin(t * 0.43) * 0.25 * (1 - move) * (1 - aim));     // looks around while standing
+  gRot(B.armL, 'z', 0.25 * run); gRot(B.armR, 'z', -0.25 * run);
+  rig.root.children[0].rotation.y = B.hip.rotation.y - aim * Math.PI / 2;    // side-on to shoot (the barrel points left)
+}
+// death in two beats: the legs buckle and the body drops (0 → .4), then it keels over onto its side,
+// legs stiffening out, head and neck going limp (.4 → 1)
+function poseDead(rig, kind, k, side) {
+  const B = rig.bones, drop = sstep(0, 0.42, k), fall = sstep(0.3, 0.85, k), stiff = sstep(0.7, 1, k);
+  if (kind === 'goose') {
+    gReset(rig); const hip = B.hip;
+    hip.position.y = -0.08 * drop; hip.rotation.x = 0.25 * drop - 0.2 * fall;
+    hip.rotation.z = side * fall * Math.PI / 2 * 0.92; hip.position.x = side * fall * 0.18; hip.position.y += 0.22 * fall;
+    for (const s of ['L', 'R']) { gRot(B['th' + s], 'x', 0.5 * drop - 0.2 * stiff); gRot(B['leg' + s], 'x', -0.9 * drop + 0.6 * stiff); gRot(B['ft' + s], 'x', 0.6 * stiff); }
+    gRot(B.neck, 'x', 0.6 * fall); gRot(B.head, 'x', 0.3 * fall); gRot(B.neck, 'z', -side * 0.5 * fall);
+    gRot(B.armL, 'z', 0.4 * fall); gRot(B.armR, 'z', -0.4 * fall);
+    return;
+  }
+  rig.root.rotation.z = side * fall * Math.PI / 2 * 0.96;
+  rig.root.position.y = -drop * (kind === 'dino' ? 0.35 : 0.14) * (1 - fall) + fall * (kind === 'dino' ? 0.2 : 0.12);
+  rig.root.position.x = side * fall * (kind === 'dino' ? 0.25 : 0.1);
+  if (kind === 'dog') {
+    for (const leg of ['FL', 'FR', 'RL', 'RR']) {
+      const f = leg[0] === 'F';
+      B[leg + 'u'].rotation.x = (f ? 0.5 : -0.35) * drop * (1 - fall) + (f ? -0.55 : 0.5) * fall;
+      B[leg + 'l'].rotation.x = (f ? 1.1 : -1.0) * drop * (1 - stiff) + (f ? 0.15 : -0.1) * stiff;
+      B[leg + 'p'].rotation.x = (f ? 0.6 : 0.5) * drop * (1 - stiff);
+    }
+    B.hips.position.y = B.hips.userData.abs.y; B.hips.rotation.set(0, 0, 0); B.chest.rotation.set(0, 0, 0);
+    B.neck.rotation.set(0.2 * drop + 0.25 * fall, 0, -side * 0.3 * fall); B.head.rotation.set(0.25 * fall, 0, -side * 0.25 * fall);
+    B.tail1.rotation.set(-0.2 * fall, 0, 0); B.tail2.rotation.set(-0.2 * fall, 0, 0);
+  } else {
+    for (const s of ['L', 'R']) {
+      B[s + 'th'].rotation.x = 0.6 * drop * (1 - fall) - 0.25 * fall; B[s + 'sh'].rotation.x = -1.1 * drop * (1 - stiff) - 0.3 * stiff;
+      B[s + 'me'].rotation.x = 1.2 * drop * (1 - stiff) + 0.3 * stiff; B[s + 'to'].rotation.x = 0;
+      B[s + 'ar'].rotation.x = 0.4 * fall;
+    }
+    B.hips.position.y = B.hips.userData.abs.y; B.hips.rotation.set(0.15 * drop * (1 - fall), 0, 0);
+    B.neck.rotation.set(0.35 * drop + 0.2 * fall, -side * 0.4 * fall, 0); B.head.rotation.set(0.3 * fall, 0, 0);
+    for (const tb of ['t1', 't2', 't3', 't4']) B[tb].rotation.set(0.12 * fall, side * 0.1 * fall, 0);
+  }
+}
+
+// ═══════════ ANIMALS IN THE BATTLE ═══════════
+// Neutral: nobody's friend or enemy. The room's host simulates them (wander, packs, the goose's guard duty)
+// and streams their state; every client animates them. Anyone can shoot them; their health is the server's.
+const ANIM_NAME = { dog: 'Собака', dino: 'Велоцираптор', goose: 'Гусь-снайпер' };
+const ANIM_BOX = { dog: [0.26, 0, 0.82, 0.64], dino: [0.36, 0, 1.75, 1.7], goose: [0.36, 0, 1.42, 0.42] };   // half width, y0, y1, half length
+const ANIM_GAIT = { dog: { walk: 1.25, run: 7.8, turn: 2.6 }, dino: { walk: 1.7, run: 6.8, turn: 1.8 }, goose: { walk: 0.75, run: 3, turn: 2.2 } };
+// metres covered by one full stride cycle at a given speed (longer strides as they speed up)
+const ANIM_STRIDE = { dog: s => 0.8 + Math.min(1, s / 8) * 1.5, dino: s => 1.5 + Math.min(1, s / 7) * 2.2, goose: s => 0.42 + Math.min(1, s / 3.5) * 0.45 };
+const GOOSE_R = 20, GOOSE_AIM = 0.9;              // he guards 20 m around himself; shoulders the rifle for 0.9 s, then fires once
+const animals = new Map();
+const animalsG = new THREE.Group(); scene.add(animalsG);
+let animHost = false, animSendT = 0, animKey = null;
+const animRand = seed => () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+// solid, dry, open ground an animal may stand on
+function animLand(x, z) {
+  if (Math.abs(x) > MAP_X - 120 || Math.abs(z) > MAP_Z - 120) return false;
+  const y = H(x, z); if (y < 3 || y > 230) return false;
+  if (BASES.some(b => Math.hypot(x - b.x, z - b.z) < BASE_R + 40)) return false;
+  for (const b of boxesIn(x - 1.5, z - 1.5, x + 1.5, z + 1.5)) if (b.y1 > y + 0.8 && Math.abs(x - b.x) < b.hx + 1.2 && Math.abs(z - b.z) < b.hz + 1.2) return false;
+  return true;
+}
+function animPathOK(x0, z0, x1, z1) { const n = Math.ceil(Math.hypot(x1 - x0, z1 - z0) / 12); for (let i = 1; i <= n; i++) if (!animLand(x0 + (x1 - x0) * i / n, z0 + (z1 - z0) * i / n)) return false; return true; }
+function makeAnimalObj(a) {
+  const src = MODELS[a.kind]; if (!src) return null;
+  const rig = buildAnimalRig(a.kind, src), g = new THREE.Group();
+  g.rotation.order = 'YXZ'; g.add(rig.root); animalsG.add(g);
+  return Object.assign(a, { rig, g, pos: new THREE.Vector3(), yaw: 0, spd: 0, ph: Math.random(), t: Math.random() * 10, aim: 0, deadT: -1, side: a.id % 2 ? 1 : -1, net: null, ai: null, poseSkip: 0 });
+}
+// first placement: worked out the same on every client from the match seed
+function placeAnimals() {
+  const R = animRand((room.seed ^ 0x5eed) >>> 0), list = [...animals.values()];
+  const spot = (cx, cz, r) => { for (let k = 0; k < 60; k++) { const x = cx + (R() * 2 - 1) * r, z = cz + (R() * 2 - 1) * r; if (animLand(x, z)) return [x, z]; } return null; };
+  const anywhere = () => { for (let k = 0; k < 400; k++) { const p = spot(0, 0, MAP_X - 150); if (p && (ISLE() || Math.abs(p[1]) < MAP_Z - 150)) return p; } return [BASES[0].x + 200, BASES[0].z]; };
+  const trees = (world.trees || []).filter(t => animLand(t.x, t.z));
+  const packs = {};
+  for (const a of list) {
+    let p;
+    if (a.kind === 'dino') {
+      if (!packs[a.grp]) { const t = trees.length ? trees[Math.floor(R() * trees.length)] : null; packs[a.grp] = t ? [t.x, t.z] : anywhere(); }
+      p = spot(packs[a.grp][0], packs[a.grp][1], 14) || packs[a.grp];
+    } else p = anywhere();
+    a.pos.set(p[0], H(p[0], p[1]), p[1]); a.yaw = R() * TAU;
+  }
+}
+function setupAnimals() {
+  const key = room.seed + ':' + room.map;
+  if (animKey === key && animals.size) { syncAnimals(); return; }
+  clearAnimals(); animKey = key;
+  if (!room.animals || !room.animals.length) return;
+  if (!modelsDone) { modelWaiters.push(() => { if (inGame && animKey === key) { animKey = null; setupAnimals(); } }); return; }
+  for (const ra of room.animals) { const a = makeAnimalObj({ id: ra.id, kind: ra.kind, grp: ra.grp, hp: ra.hp, max: ra.max, alive: ra.alive }); if (a) animals.set(a.id, a); }
+  placeAnimals();
+  for (const ra of room.animals) { const a = animals.get(ra.id); if (a && ra.st) applyAnimalState(a, ra.st, true); if (a && !ra.alive) { a.alive = false; a.deadT = 9; } }
+}
+function syncAnimals() {
+  if (!room.animals) return;
+  for (const ra of room.animals) { const a = animals.get(ra.id); if (!a) continue; a.hp = ra.hp; if (!ra.alive && a.alive) killAnimal(a); }
+}
+function clearAnimals() { for (const a of animals.values()) animalsG.remove(a.g); animals.clear(); animKey = null; animalMk && (animalMk.style.display = 'none'); }
+function applyAnimalState(a, s, snap) {
+  a.net = { x: s[1], z: s[2], yaw: s[3], spd: s[4], aim: s[5] || 0, t: performance.now() };
+  if (snap) { a.pos.set(s[1], H(s[1], s[2]), s[2]); a.yaw = s[3]; a.spd = s[4]; }
+}
+socket.on('anst', list => { if (!inGame || animHost || !Array.isArray(list)) return; for (const s of list) { const a = animals.get(s[0]); if (a && a.alive) applyAnimalState(a, s, a.pos.distanceToSquared(_v1.set(s[1], a.pos.y, s[2])) > 2500); } });
+socket.on('admg', d => {
+  const a = animals.get(d.id); if (!a) return; a.hp = d.hp;
+  if (animHost && a.alive) animalScared(a, d.by);
+});
+socket.on('adead', d => { const a = animals.get(d.id); if (a && a.alive) { a.hp = 0; killAnimal(a); if (d.by === myId) logMsg('<b style="color:#ffd54a">' + ANIM_NAME[a.kind] + '</b> — убит(а)'); } });
+function killAnimal(a) {
+  a.alive = false; a.deadT = 0; a.spd = 0; a.aim = 0;
+  // fall away from whoever is looking, so the fall reads well
+  const r = _v1.set(Math.cos(a.yaw), 0, -Math.sin(a.yaw)); a.side = r.dot(_v2.copy(camera.position).sub(a.pos)) > 0 ? 1 : -1;
+}
+// a shot or a blast reached an animal (my own shot: report it)
+function hitAnimal(a, k, pt, scale = 1) {
+  if (!a.alive) return;
+  const dmg = Math.round(((DMG[k] && (DMG[k].soldier ?? DMG[k].jeep)) || 10) * scale);
+  if (dmg <= 0) return;
+  socket.emit('ahit', { id: a.id, dmg, k });
+}
+function rayAnimal(o, d, a, maxT) {
+  const c = Math.cos(a.yaw), s = Math.sin(a.yaw), hb = ANIM_BOX[a.kind];
+  const ox = o[0] - a.pos.x, oz = o[2] - a.pos.z;
+  const lo = [ox * c - oz * s, o[1] - a.pos.y, ox * s + oz * c], ld = [d[0] * c - d[2] * s, d[1], d[0] * s + d[2] * c];
+  const t = rayBox(lo, ld, { x: 0, z: 0, hx: hb[0], hz: hb[3], y0: hb[1], y1: hb[2] });
+  return t !== null && t <= maxT ? t : null;
+}
+// ── the host's brains ──
+function animalScared(a, by) {
+  const ai = a.ai || (a.ai = {}); const p = by && room.players.find(q => q.id === by), v = p && p.vid && vehicles.get(p.vid);
+  const from = v ? v.pos : camera.position, ang = Math.atan2(a.pos.x - from.x, a.pos.z - from.z);
+  if (a.kind === 'goose') return;
+  const flee = (o, dist) => { for (let k = 0; k < 10; k++) { const aa = ang + (Math.random() - 0.5) * 1.4, x = o.pos.x + Math.sin(aa) * dist, z = o.pos.z + Math.cos(aa) * dist; if (animLand(x, z)) { o.ai = Object.assign(o.ai || {}, { tx: x, tz: z, mode: 'run', wait: 0, scared: 6 }); return; } } };
+  if (a.kind === 'dog') flee(a, 120 + Math.random() * 80);
+  else { const lead = [...animals.values()].find(o => o.kind === 'dino' && o.grp === a.grp && o.alive && !o.follow) || a; flee(lead, 150 + Math.random() * 100); }
+}
+function animalBrain(a, dt) {
+  const ai = a.ai || (a.ai = { tx: a.pos.x, tz: a.pos.z, mode: 'idle', wait: Math.random() * 4 });
+  const G = ANIM_GAIT[a.kind];
+  // dinosaurs move as a pack: the first one alive leads, the rest keep their places around it
+  if (a.kind === 'dino') {
+    const lead = [...animals.values()].find(o => o.kind === 'dino' && o.grp === a.grp && o.alive);
+    a.follow = lead !== a ? lead : null;
+    if (a.follow) {
+      const i = a.id - lead.id, sx = (i % 2 ? 1 : -1) * (3 + i * 1.3), sz = -3.5 * i;
+      const c = Math.cos(lead.yaw), s = Math.sin(lead.yaw);
+      ai.tx = lead.pos.x + sx * c + sz * s; ai.tz = lead.pos.z - sx * s + sz * c;
+      const d = Math.hypot(ai.tx - a.pos.x, ai.tz - a.pos.z);
+      const want = d < 1.2 ? 0 : Math.min(G.run * 1.05, lead.spd + Math.max(0, d - 2) * 0.6 + (lead.spd < 0.3 && d > 2 ? G.walk : 0));
+      return steer(a, ai, want, dt);
+    }
+  }
+  if (a.kind === 'goose') {
+    // guard duty: anyone (a machine with somebody in it, or a soldier) within 20 m gets one round, once per visit
+    ai.shot = ai.shot || new Map();
+    ai.look = (ai.look || 0) - dt;
+    if (ai.look <= 0 && !ai.tgt) {
+      ai.look = 0.25;
+      for (const v of vehicles.values()) {
+        const d = v.pos.distanceTo(a.pos);
+        if (ai.shot.has(v.vid) && d > GOOSE_R + 10) ai.shot.delete(v.vid);
+        if (!v.alive || v.dead || !(v.driver || v.gunner) || ai.shot.has(v.vid) || d > GOOSE_R) continue;
+        ai.tgt = v.vid; ai.aimT = 0; ai.shot.set(v.vid, 1); break;
+      }
+    }
+    if (ai.tgt) {
+      const v = vehicles.get(ai.tgt);
+      ai.aimT += dt;
+      if (v) a.yaw = turnTo(a.yaw, Math.atan2(v.pos.x - a.pos.x, v.pos.z - a.pos.z), 3.5 * dt);
+      a.spd = Math.max(0, a.spd - 4 * dt); a.aim = Math.min(1, a.aim + dt / 0.5);
+      if (ai.aimT >= GOOSE_AIM && !ai.fired) { ai.fired = true; if (v && v.alive) socket.emit('gfire', { g: a.id, vid: v.vid }); }
+      if (ai.aimT > GOOSE_AIM + 1.6 || !v) { ai.tgt = null; ai.fired = false; }
+      return;
+    }
+    a.aim = Math.max(0, a.aim - dt / 0.6);
+  }
+  ai.wait -= dt; if (ai.scared) ai.scared -= dt;
+  const d = Math.hypot(ai.tx - a.pos.x, ai.tz - a.pos.z);
+  if (ai.mode !== 'idle' && d < (ai.mode === 'run' ? 3 : 1.5)) { ai.mode = 'idle'; ai.wait = a.kind === 'goose' ? 3 + Math.random() * 9 : 1 + Math.random() * (a.kind === 'dog' ? 6 : 10); }
+  if (ai.mode === 'idle' && ai.wait <= 0) {
+    // somewhere new: dogs roam far and often break into a run; the pack strolls between the trees; the goose potters about
+    const runP = a.kind === 'dog' ? 0.35 : a.kind === 'dino' ? 0.2 : 0.05;
+    const [r0, r1] = a.kind === 'dog' ? [25, 170] : a.kind === 'dino' ? [50, 220] : [6, 35];
+    const home = a.kind === 'goose' ? (ai.home || (ai.home = [a.pos.x, a.pos.z])) : null;
+    for (let k = 0; k < 12; k++) {
+      let x, z;
+      if (a.kind === 'dino' && world.trees && world.trees.length && k < 8) { const t = world.trees[Math.floor(Math.random() * world.trees.length)]; if (Math.hypot(t.x - a.pos.x, t.z - a.pos.z) > r1 * 1.6) continue; x = t.x + (Math.random() - 0.5) * 12; z = t.z + (Math.random() - 0.5) * 12; }
+      else { const ang = Math.random() * TAU, r = r0 + Math.random() * (r1 - r0), cx = home ? home[0] : a.pos.x, cz = home ? home[1] : a.pos.z; x = cx + Math.sin(ang) * r; z = cz + Math.cos(ang) * r; }
+      if (animLand(x, z) && animPathOK(a.pos.x, a.pos.z, x, z)) { ai.tx = x; ai.tz = z; ai.mode = Math.random() < runP ? 'run' : 'walk'; break; }
+    }
+    if (ai.mode === 'idle') ai.wait = 1;
+  }
+  steer(a, ai, ai.mode === 'idle' ? 0 : ai.mode === 'run' ? G.run * (0.85 + (a.id % 5) * 0.04) : G.walk, dt);
+}
+function turnTo(y, want, max) { let dy = ((want - y + Math.PI) % TAU + TAU) % TAU - Math.PI; return y + Math.max(-max, Math.min(max, dy)); }
+function steer(a, ai, want, dt) {
+  const G = ANIM_GAIT[a.kind], d = Math.hypot(ai.tx - a.pos.x, ai.tz - a.pos.z);
+  if (want > 0 && d > 0.5) {
+    const ang = Math.atan2(ai.tx - a.pos.x, ai.tz - a.pos.z), off = Math.abs(((ang - a.yaw + Math.PI) % TAU + TAU) % TAU - Math.PI);
+    a.yaw = turnTo(a.yaw, ang, G.turn * dt * (a.spd > 4 ? 0.7 : 1));
+    want *= Math.max(0.25, Math.cos(Math.min(off, 1.3)));             // slow down into a sharp turn
+  } else want = 0;
+  const acc = want > a.spd ? (a.kind === 'dog' ? 6 : 4) : 5;
+  a.spd += Math.max(-acc * dt, Math.min(acc * dt, want - a.spd));
+  const nx = a.pos.x + Math.sin(a.yaw) * a.spd * dt, nz = a.pos.z + Math.cos(a.yaw) * a.spd * dt;
+  if (a.spd > 0.01) { if (animLand(nx, nz)) { a.pos.x = nx; a.pos.z = nz; } else { a.spd = 0; if (ai) { ai.mode = 'idle'; ai.wait = 0.3; } } }
+}
+// ── every frame, every client ──
+let animalMk = null;
+function updateAnimals(dt, now) {
+  if (!animals.size) return;
+  animHost = !!room && room.hostId === myId && room.state === 'playing';
+  const cam = camera.position;
+  for (const a of animals.values()) {
+    if (a.alive) {
+      if (animHost) animalBrain(a, dt);
+      else if (a.net) {
+        // follow the host's stream, predicting along the heading in between packets
+        const n = a.net, age = Math.min(0.5, (now - n.t) / 1000);
+        const px = n.x + Math.sin(n.yaw) * n.spd * age, pz = n.z + Math.cos(n.yaw) * n.spd * age, k = 1 - Math.exp(-6 * dt);
+        a.pos.x += (px - a.pos.x) * k; a.pos.z += (pz - a.pos.z) * k;
+        a.yaw = turnTo(a.yaw, n.yaw, 4 * dt); a.spd += (n.spd - a.spd) * k; a.aim += ((n.aim ? 1 : 0) - a.aim) * Math.min(1, dt * 3);
+      }
+    } else a.deadT += dt;
+    // corpses stay a while, then sink away
+    if (!a.alive && a.deadT > 45) { a.g.visible = false; continue; }
+    a.pos.y = H(a.pos.x, a.pos.z) - (!a.alive && a.deadT > 40 ? (a.deadT - 40) * 0.25 : 0);
+    const dist = a.pos.distanceTo(cam);
+    a.g.visible = dist < 420;
+    if (!a.g.visible) continue;
+    a.g.position.copy(a.pos); a.g.rotation.y = a.yaw;
+    // lie along the slope (only four-legged and the raptor; the goose stays upright)
+    if (a.kind !== 'goose') { const L = a.kind === 'dog' ? 0.5 : 1.0, f = H(a.pos.x + Math.sin(a.yaw) * L, a.pos.z + Math.cos(a.yaw) * L), b = H(a.pos.x - Math.sin(a.yaw) * L, a.pos.z - Math.cos(a.yaw) * L); a.g.rotation.x += ((-Math.atan2(f - b, 2 * L)) - a.g.rotation.x) * Math.min(1, dt * 6); }
+    a.ph = (a.ph + dt * a.spd / ANIM_STRIDE[a.kind](a.spd)) % 1; a.t += dt;
+    // far away: pose less often
+    if (dist > 140 && (a.poseSkip = (a.poseSkip + 1) % 3)) continue;
+    if (!a.alive) { if (!a.deadDone) { const k = Math.min(1, a.deadT / (a.kind === 'dino' ? 1.3 : 1.05)); poseDead(a.rig, a.kind, k, a.side); a.deadDone = k >= 1; } continue; }
+    if (a.kind === 'dog') poseDog(a.rig, a.ph, a.spd, a.t); else if (a.kind === 'dino') poseDino(a.rig, a.ph, a.spd, a.t); else poseGoose(a.rig, a.ph, a.spd, a.t, a.aim);
+  }
+  if (animHost) {
+    animSendT -= dt;
+    if (animSendT <= 0) {
+      animSendT = 0.2;
+      const list = []; for (const a of animals.values()) if (a.alive) list.push([a.id, +a.pos.x.toFixed(1), +a.pos.z.toFixed(1), +a.yaw.toFixed(2), +a.spd.toFixed(1), a.aim > 0.5 ? 1 : 0]);
+      socket.emit('anst', list);
+    }
+  }
+  crushAnimals();
+}
+// running one over with a machine
+const crushT = new Map();
+function crushAnimals() {
+  const v = myVehicle(); if (!v || !v.alive || mySeat === 1 || v.type === 'plane' || v.type === 'drone' || v.type === 'ship' || v.type === 'soldier' || Math.abs(v.speed || 0) < 3) return;
+  const hb = HITBOX[v.skin || v.type] || HITBOX[v.type], r = Math.max(hb[0], hb[3]) * 0.8;
+  for (const a of animals.values()) {
+    if (!a.alive || Math.abs(a.pos.x - v.pos.x) > r + 2 || Math.abs(a.pos.z - v.pos.z) > r + 2 || a.pos.distanceTo(v.pos) > r + ANIM_BOX[a.kind][0] + 0.4) continue;
+    if (performance.now() - (crushT.get(a.id) || 0) < 1000) continue;
+    crushT.set(a.id, performance.now());
+    socket.emit('ahit', { id: a.id, dmg: v.type === 'tank' ? 999 : Math.round(Math.abs(v.speed) * 6), k: 'crush' });
+  }
+}
+// the goose's single shot: a tracer from his rifle to the target, and the crack of a big rifle
+socket.on('gshot', d => {
+  const a = animals.get(d.g), v = vehicles.get(d.vid); if (!a || !v) return;
+  a.aim = 1;
+  a.g.updateMatrixWorld(true);
+  const o = a.rig.muzzle ? a.rig.muzzle.getWorldPosition(new THREE.Vector3()) : a.pos.clone().setY(a.pos.y + 0.8);
+  const to = v.pos.clone(); to.y += v.type === 'soldier' ? 1.3 : 1.2;
+  const dir = to.clone().sub(o).normalize();
+  spawnShot('ak', o, dir.clone().multiplyScalar(700), false, null);
+  particles.muzzle(o, dir);
+  audio.at('shoot', o, 1.6, 0.62, 1600);
+  if (v.vid === myVid) logMsg('<b style="color:#ffd54a">Гусь-снайпер</b> выстрелил в вас!');
+});
+// the marker of an animal under the crosshair: name and a yellow health bar
+function updateAnimalMarker() {
+  if (!animalMk) { animalMk = document.createElement('div'); animalMk.className = 'mk an'; animalMk.innerHTML = '<span></span><div class="bar"><i></i></div>'; $('markers').appendChild(animalMk); }
+  const a = mode === 'drive' && aimHit && aimHit.kind === 'animal' ? aimHit.a : null;
+  if (a && a.alive) { animalMk.a = a; animalMk.t = performance.now(); }
+  const m = animalMk.a;
+  if (!m || !m.alive || !inGame || mode !== 'drive' || performance.now() - animalMk.t > 180 || !m.g.visible) { animalMk.style.display = 'none'; return; }
+  const p = project(_v1.copy(m.pos).setY(m.pos.y + ANIM_BOX[m.kind][2] + 0.7));
+  if (!p) { animalMk.style.display = 'none'; return; }
+  const v = myVehicle(), dist = v ? m.pos.distanceTo(v.pos) : 0;
+  animalMk.style.display = 'block'; animalMk.style.left = p[0] + 'px'; animalMk.style.top = p[1] + 'px';
+  animalMk.firstChild.textContent = ANIM_NAME[m.kind] + ' · ' + Math.round(dist) + ' м';
+  animalMk.querySelector('i').style.width = Math.max(0, Math.round(m.hp / m.max * 100)) + '%';
+}
 // ═══════════ TREES: the two tree models, mixed at random ═══════════
 // near the camera: the full models, instanced per 250 m cell; further out: a cut-out picture of the same tree
 // on two crossed quads (rendered once from the model), so thousands of trees stay cheap
@@ -3627,6 +4174,7 @@ const sgFalloff = d => d <= 50 ? 1 : Math.max(0.05, 1 - (d - 50) / 40 * 0.8);
 const HANGAR_DMG = k => (DMG[k] && DMG[k].tank) || 0;       // a hangar takes what a tank would
 function impact(s, pt, kind, v) {
   const sp = SPEC[s.k];
+  if (kind === 'animal' && !sp.boom) particles.blood(pt);
   if (kind === 'water') particles.splash(pt, sp.boom ? 1.4 : 0.4);
   else if (kind === 'veh' && !sp.boom) particles.spark(pt);
   else if (!sp.boom) particles.dirt(pt);
@@ -3641,6 +4189,8 @@ function impact(s, pt, kind, v) {
     if (near) socket.emit('hhit', { team: hg.team, dmg: HANGAR_DMG(s.k) });
   }
   if (kind === 'veh' && v && v.team !== myTeam) hitVehicle(v, s.k, pt, s.k === 'sg' ? sgFalloff(s.o0.distanceTo(pt)) : 1);
+  if (kind === 'animal' && v) hitAnimal(v, s.k, pt, s.k === 'sg' ? sgFalloff(s.o0.distanceTo(pt)) : 1);
+  if (sp.splash) for (const a of animals.values()) { if (!a.alive || a === v) continue; const d = a.pos.distanceTo(pt); if (d < sp.splash + 2) hitAnimal(a, s.k, pt, 0.7 * (1 - d / (sp.splash + 2))); }
   if (sp.splash) for (const o of vehicles.values()) {   // blast damage nearby
     if (!o.alive || o === v || o.team === myTeam) continue;
     const d = o.pos.distanceTo(pt);
@@ -3694,7 +4244,7 @@ function updateShots(dt) {
     const hit = castRay(_o3, _d3, step, s.ownerVid, { step: Math.max(2, step / 4) });
     if (hit) {
       const pt = new THREE.Vector3(_o3[0] + _d3[0] * hit.t, _o3[1] + _d3[1] * hit.t, _o3[2] + _d3[2] * hit.t);
-      impact(s, pt, hit.kind, hit.v);
+      impact(s, pt, hit.kind, hit.v || hit.a);
       scene.remove(s.mesh); shots.splice(i, 1); continue;
     }
     s.pos.addScaledVector(s.vel, dt);
@@ -3732,6 +4282,7 @@ function icbmImpact(s) {
     if (d > ICBM_R) continue;
     socket.emit('hit', { vid: o.vid, dmg: d < 16 ? 300 : Math.round(150 * (1 - d / ICBM_R)), k: 'icbm', pt: [+o.pos.x.toFixed(1), +o.pos.y.toFixed(1), +o.pos.z.toFixed(1)] });
   }
+  for (const a of animals.values()) if (a.alive && Math.hypot(a.pos.x - pt.x, a.pos.z - pt.z) < ICBM_R) socket.emit('ahit', { id: a.id, dmg: 300, k: 'icbm' });
 }
 function fireShot(k, o, dir, extra = {}) {
   const vel = dir.clone().multiplyScalar(SPEC[k].speed);
@@ -4493,6 +5044,7 @@ function droneBoom(v, pt, hit) {
   if (v.crashSent) return;
   particles.explosion(pt, 1.3); audio.boom(pt, 1.1);
   if (hit && hit.kind === 'veh' && hit.v.team !== v.team && hit.v.alive) hitVehicle(hit.v, 'fpv', pt);
+  for (const a of animals.values()) if (a.alive && a.pos.distanceTo(pt) < 8) hitAnimal(a, 'fpv', pt, hit && hit.a === a ? 1 : 0.6 * (1 - a.pos.distanceTo(pt) / 8));
   for (const o of vehicles.values()) {
     if (!o.alive || o.team === v.team || o === v || (hit && hit.v === o)) continue;
     const d = o.pos.distanceTo(pt);
@@ -4838,7 +5390,7 @@ function autoSees(v, o) {
   const a = [v.pos.x, v.pos.y + 2.2, v.pos.z], d = [o.pos.x - a[0], o.pos.y + 1.2 - a[1], o.pos.z - a[2]];
   const L = Math.hypot(d[0], d[1], d[2]); if (L < 1) return true;
   d[0] /= L; d[1] /= L; d[2] /= L;
-  const h = castRay(a, d, L, v.vid, { step: 6 });
+  const h = castRay(a, d, L, v.vid, { step: 6, noAnim: true });
   return !h || (h.kind === 'veh' && h.v === o) || h.t > L - 3;
 }
 function autoPhysics(v, dt, thr, steer) {
@@ -5965,7 +6517,7 @@ socket.on('room', r => {
   if (resumeAfterLoad) resumeRoom();
   renderLobby();
   if (inGame) {
-    syncVehicles();
+    syncVehicles(); syncAnimals();
     if (r.hangars) for (const h of r.hangars) applyHangar(h);
     // the server dropped me out of my vehicle (e.g. it was destroyed)
     const p = me();
@@ -5989,8 +6541,8 @@ function startPlaying(fromStart) {
   inGame = true;
   showScreen(null);
   $('ui').classList.add('on');
-  clearVehicles(); clearShots();
-  syncVehicles();
+  clearVehicles(); clearShots(); animKey = null;
+  syncVehicles(); setupAnimals();
   myVid = null; mode = 'cmd';
   document.body.classList.add('cmdv');
   const b = BASES[myTeam()];
@@ -6086,7 +6638,7 @@ socket.on('vdead', d => {
   destroyVis(v);
   const mine = d.vid === myVid;
   v.driver = null; v.gunner = null;
-  const how = d.how === 'water' ? 'утонул' : d.how === 'abandon' ? 'брошен' : d.how === 'crash' ? 'разбился' : d.how === 'sam' ? 'сбит ПВО' : d.how === 'fpv' ? 'взорвался' : d.how === 'icbm' ? 'ракетный удар' : '';
+  const how = d.how === 'water' ? 'утонул' : d.how === 'abandon' ? 'брошен' : d.how === 'crash' ? 'разбился' : d.how === 'sam' ? 'сбит ПВО' : d.how === 'fpv' ? 'взорвался' : d.how === 'icbm' ? 'ракетный удар' : d.how === 'goose' ? 'гусь-снайпер' : '';
   const vic = `<b style="color:${TEAM_CSS[v.team]}">${TYPE_ICON[v.type]} ${d.driver ? nameOf(d.driver) : vName(v)}</b>`;
   feed(d.by ? `<b style="color:${TEAM_CSS[1 - v.team]}">${nameOf(d.by)}</b><span class="x">✕</span>${vic}` : `${vic}<span class="x">${how || '✕'}</span>`);
   if (d.by === myId) centerMsg('УНИЧТОЖЕН', vName(v).toUpperCase(), 1500, '#ff7a68');
@@ -6152,7 +6704,7 @@ socket.on('rejoined', d => { if (d.id !== myId) logMsg('<b>' + esc(d.name) + '</
 function leaveGame() {
   inGame = false; myVid = null; mode = 'cmd';
   $('ui').classList.remove('on'); $('warn').style.display = 'none'; document.body.classList.remove('cmdv');
-  clearVehicles(); clearShots();
+  clearVehicles(); clearShots(); clearAnimals();
   audio.engineOff(); audio.setMusicVol(0.3);
   quietUnlock = true; document.exitPointerLock && document.exitPointerLock();
 }
@@ -6222,11 +6774,12 @@ function frame(now) {
     updateSamSites(dt, now);
     updateSams(dt);
     updateShots(dt);
+    updateAnimals(dt, now);
     updateSpotting(dt);
     updateGrass(); updateTrees();
     for (const r of world_radars) r.rotation.y += dt * 1.5;
     if (mode === 'drive') updateDriveCam(dt); else updateCmd(dt);
-    updateMarkers();
+    updateMarkers(); updateAnimalMarker();
     flushDamage(now);
     updateTopBar(); drawMinimap();
     if (mode === 'drive') updateBottom();
